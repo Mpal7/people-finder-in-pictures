@@ -51,6 +51,49 @@ def collect_refs(paths: list[str]) -> list[Path]:
     return refs
 
 
+def _center_face(boxes, w: int, h: int) -> int:
+    """Index of the face closest to the image center (area breaks ties)."""
+    if len(boxes) == 1:
+        return 0
+    cx = (boxes[:, 0] + boxes[:, 2]) / (2 * w)
+    cy = (boxes[:, 1] + boxes[:, 3]) / (2 * h)
+    dist = np.sqrt((cx - 0.5) ** 2 + (cy - 0.5) ** 2)
+    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    return int(np.lexsort((-areas, dist))[0])
+
+
+def embed_reference(path: Path, fm, models: tuple[str, ...], max_side: int,
+                    label: str) -> dict[str, np.ndarray] | None:
+    """Embed one reference photo (positive or negative).
+
+    Prefers the landmark sidecar written by pick_reference_faces.py; otherwise
+    detects faces and uses the one closest to the center of the frame.
+    """
+    arr = load_image(path, max_side)
+    bgr = np.ascontiguousarray(arr[:, :, ::-1])
+    h, w = bgr.shape[:2]
+    sidecar = Path(str(path) + ".kps.json")
+    if sidecar.exists():
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        kps_norm = data.get("kps_norm")
+        if kps_norm:
+            kps = np.asarray(kps_norm, dtype=np.float32) * np.array([w, h], dtype=np.float32)
+            crop = aligned_crop(bgr, kps)
+            return {m: fm.embed(m, crop) for m in models}
+    boxes, kpss = fm.detect(bgr)
+    if len(boxes) == 0:
+        print(f"WARN: no face detected in {label} {path.name}; skipped")
+        return None
+    if len(boxes) > 1:
+        print(f"note: {len(boxes)} faces in {label} {path.name}; using the one closest to center")
+    i = _center_face(boxes, w, h)
+    crop = aligned_crop(bgr, kpss[i])
+    return {m: fm.embed(m, crop) for m in models}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=str(PROJECT / "data" / "faces.db"))
@@ -64,6 +107,14 @@ def main() -> int:
     ap.add_argument("--min-z", type=float, default=None, help="drop faces below this fused z-score")
     ap.add_argument("--fusion", choices=["mean", "max"], default="mean")
     ap.add_argument("--weights", default="", help="per-model weights, e.g. w600k=1,adaface=1,lvface=1")
+    ap.add_argument("--neg-refs", nargs="+", default=[],
+                    help="photos of look-alikes to suppress (files or directories)")
+    ap.add_argument("--neg-weight", type=float, default=0.5,
+                    help="penalty weight for negative-reference similarity (0 disables)")
+    ap.add_argument("--no-near-dup", action="store_true",
+                    help="do not group near-identical photos in the review page")
+    ap.add_argument("--near-dup-threshold", type=int, default=6,
+                    help="dHash Hamming distance for similar-photo grouping (default 6)")
     ap.add_argument("--flip", action="store_true", default=None, help="override ref-embedding flip TTA")
     ap.add_argument("--no-flip", action="store_false", dest="flip")
     ap.add_argument("--max-side", type=int, default=0, help="override (default: index config)")
@@ -96,15 +147,27 @@ def main() -> int:
     weights = {m: 1.0 for m in models}
     if args.weights:
         for part in args.weights.split(","):
-            k, v = part.split("=")
-            if k.strip() in weights:
-                weights[k.strip()] = float(v)
+            try:
+                k, v = part.split("=", 1)
+                if k.strip() in weights:
+                    weights[k.strip()] = float(v)
+            except ValueError:
+                print(f"ERROR: bad --weights entry '{part}' (expected model=value)", file=sys.stderr)
+                return 1
+    if sum(weights.values()) <= 0:
+        print("ERROR: at least one model weight must be > 0", file=sys.stderr)
+        return 1
+    if args.neg_weight < 0:
+        print("ERROR: --neg-weight must be >= 0", file=sys.stderr)
+        return 1
 
     ref_paths = collect_refs(args.refs)
     if not ref_paths:
         print("ERROR: no reference photos found", file=sys.stderr)
         return 1
-    print(f"references: {len(ref_paths)}  models: {models}  flip: {flip}  det: {det_sizes}")
+    neg_paths = collect_refs(args.neg_refs) if args.neg_refs else []
+    print(f"references: {len(ref_paths)}  negatives: {len(neg_paths)}  models: {models}  "
+          f"flip: {flip}  det: {det_sizes}")
     prog = Progress(args.progress_json)
     prog.write(stage="starting", total=len(ref_paths), done=0)
 
@@ -120,37 +183,11 @@ def main() -> int:
     ref_names: list[str] = []
     for ri, rp in enumerate(ref_paths):
         prog.write(stage="refs", done=ri, total=len(ref_paths), detail=rp.name)
-        arr = load_image(rp, max_side)
-        bgr = np.ascontiguousarray(arr[:, :, ::-1])
-        h, w = bgr.shape[:2]
-        sidecar = Path(str(rp) + ".kps.json")
-        if sidecar.exists():
-            # crop made by pick_reference_faces.py: exact landmarks, no detection
-            data = json.loads(sidecar.read_text(encoding="utf-8"))
-            kps = np.asarray(data["kps_norm"], dtype=np.float32) * np.array([w, h], dtype=np.float32)
-            crop = aligned_crop(bgr, kps)
-            for m in models:
-                ref_vecs[m].append(fm.embed(m, crop))
-            ref_names.append(rp.name)
+        vecs = embed_reference(rp, fm, models, max_side, "reference")
+        if vecs is None:
             continue
-        boxes, kpss = fm.detect(bgr)
-        if len(boxes) == 0:
-            print(f"WARN: no face detected in reference {rp.name}; skipped")
-            continue
-        if len(boxes) > 1:
-            # Prefer the face closest to the image center (area breaks ties):
-            # centered portraits beat "largest face" when a bigger bystander is at the edge.
-            cx = (boxes[:, 0] + boxes[:, 2]) / (2 * w)
-            cy = (boxes[:, 1] + boxes[:, 3]) / (2 * h)
-            d = np.sqrt((cx - 0.5) ** 2 + (cy - 0.5) ** 2)
-            areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-            i = int(np.lexsort((-areas, d))[0])
-            print(f"note: {len(boxes)} faces in {rp.name}; using the one closest to center")
-        else:
-            i = 0
-        crop = aligned_crop(bgr, kpss[i])
         for m in models:
-            ref_vecs[m].append(fm.embed(m, crop))
+            ref_vecs[m].append(vecs[m])
         ref_names.append(rp.name)
     n_refs = len(ref_names)
     if n_refs == 0:
@@ -158,6 +195,20 @@ def main() -> int:
         return 1
     print(f"usable references: {n_refs}")
     ref_mat = {m: np.stack(ref_vecs[m]) for m in models}  # (n_refs, 512)
+
+    neg_vecs: dict[str, list[np.ndarray]] = {m: [] for m in models}
+    neg_names: list[str] = []
+    for ni, npth in enumerate(neg_paths):
+        prog.write(stage="neg_refs", done=ni, total=len(neg_paths), detail=npth.name)
+        vecs = embed_reference(npth, fm, models, max_side, "negative reference")
+        if vecs is None:
+            continue
+        for m in models:
+            neg_vecs[m].append(vecs[m])
+        neg_names.append(npth.name)
+    neg_mat = {m: np.stack(neg_vecs[m]) for m in models} if neg_names else None
+    if neg_paths:
+        print(f"usable negative references: {len(neg_names)}")
 
     # ---- load gallery ----
     prog.write(stage="scoring", done=0)
@@ -190,6 +241,8 @@ def main() -> int:
 
     sims: dict[str, np.ndarray] = {}
     zs: dict[str, np.ndarray] = {}
+    neg_sims: dict[str, np.ndarray] = {}
+    neg_zs: dict[str, np.ndarray] = {}
     for m in models:
         X = np.stack(vecs[m])                     # (n_faces, 512), L2-normalized
         S = X @ ref_mat[m].T                      # cosine to each ref
@@ -197,11 +250,25 @@ def main() -> int:
         sims[m] = s
         mu, sd = float(s.mean()), float(s.std()) + 1e-9
         zs[m] = (s - mu) / sd
+        if neg_mat is not None:
+            ns = (X @ neg_mat[m].T).max(axis=1)
+            neg_sims[m] = ns
+            # Same gallery normalization as the positive score, so the penalty
+            # is expressed in comparable z units across models.
+            neg_zs[m] = (ns - mu) / sd
 
     if args.fusion == "mean":
-        fused = sum(weights[m] * zs[m] for m in models) / sum(weights.values())
+        fused_pos = sum(weights[m] * zs[m] for m in models) / sum(weights.values())
     else:
-        fused = np.max(np.stack([weights[m] * zs[m] for m in models]), axis=0)
+        fused_pos = np.max(np.stack([weights[m] * zs[m] for m in models]), axis=0)
+    if neg_zs and args.neg_weight > 0:
+        # Suppress faces that look more like the negatives than the gallery
+        # average. Only above-average negative similarity is penalized.
+        neg_penalty = np.mean(np.stack([np.maximum(0.0, neg_zs[m]) for m in models]), axis=0)
+        fused = fused_pos - args.neg_weight * neg_penalty
+    else:
+        neg_penalty = np.zeros(len(face_order), dtype=np.float64)
+        fused = fused_pos
     raw_mean = sum(sims[m] for m in models) / len(models)
 
     order = np.argsort(-fused)
@@ -212,25 +279,40 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "scores_all.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["relpath", "face_id", "det_score", "fused_z", "raw_mean"] + [f"sim_{m}" for m in models] + [f"z_{m}" for m in models])
+        header = (["relpath", "face_id", "det_score", "fused_z", "fused_pos_z", "neg_penalty",
+                   "raw_mean"] + [f"sim_{m}" for m in models]
+                  + [f"z_{m}" for m in models])
+        if neg_mat is not None:
+            header += [f"neg_sim_{m}" for m in models] + [f"neg_z_{m}" for m in models]
+        w.writerow(header)
         for k, rank_i in enumerate(order):
             fid = face_order[rank_i]
             meta = face_meta[fid]
-            w.writerow([meta["relpath"], fid, round(meta["det_score"], 4), round(float(fused[rank_i]), 4),
-                        round(float(raw_mean[rank_i]), 4)]
-                       + [round(float(sims[m][rank_i]), 4) for m in models]
-                       + [round(float(zs[m][rank_i]), 3) for m in models])
+            row = [meta["relpath"], fid, round(meta["det_score"], 4),
+                   round(float(fused[rank_i]), 4), round(float(fused_pos[rank_i]), 4),
+                   round(float(neg_penalty[rank_i]), 4), round(float(raw_mean[rank_i]), 4)]
+            row += [round(float(sims[m][rank_i]), 4) for m in models]
+            row += [round(float(zs[m][rank_i]), 3) for m in models]
+            if neg_mat is not None:
+                row += [round(float(neg_sims[m][rank_i]), 4) for m in models]
+                row += [round(float(neg_zs[m][rank_i]), 3) for m in models]
+            w.writerow(row)
 
     # ---- group kept faces into image candidates ----
     by_image: dict[int, dict] = {}
     for rank_i in keep:
         fid = face_order[rank_i]
         meta = face_meta[fid]
+        neg_val = (max(float(neg_sims[m][rank_i]) for m in models)
+                   if neg_mat is not None else None)
         img = by_image.setdefault(meta["image_id"], {
             "relpath": meta["relpath"], "score": float(fused[rank_i]), "faces": [],
             "per_model": {m: float(sims[m][rank_i]) for m in models},
+            "neg": neg_val,
         })
         img["score"] = max(img["score"], float(fused[rank_i]))
+        if neg_val is not None:
+            img["neg"] = max(img.get("neg") or 0.0, neg_val)
         img["faces"].append({"bbox": meta["bbox"], "score": float(fused[rank_i])})
     candidates = sorted(by_image.values(), key=lambda c: -c["score"])
     for c in candidates:
@@ -239,13 +321,17 @@ def main() -> int:
     print(f"candidates: {len(keep)} faces in {len(candidates)} images -> {out_dir}")
 
     review.generate(out_dir, candidates, ref_names, list(models), root, load_image, max_side,
-                    progress=prog, api_url=args.api_review)
+                    progress=prog, api_url=args.api_review,
+                    near_dup_threshold=0 if args.no_near_dup else args.near_dup_threshold)
     print(f"review page: {out_dir / 'index.html'}")
     print(f"score dump:  {out_dir / 'scores_all.csv'}")
     (out_dir / "run_meta.json").write_text(json.dumps({
         "refs": ref_names, "models": list(models), "fusion": args.fusion,
-        "top_faces": args.top_faces, "faces_kept": int(len(keep)),
-        "candidate_images": len(candidates),
+        "top_faces": args.top_faces, "faces_kept": len(keep),
+        "candidate_images": len(candidates), "min_z": args.min_z,
+        "weights": args.weights, "negative_refs": neg_names,
+        "neg_weight": args.neg_weight,
+        "near_dup_threshold": 0 if args.no_near_dup else args.near_dup_threshold,
         "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
     }, indent=1), encoding="utf-8")
     prog.done(stage="finished", done=len(candidates), total=len(candidates))

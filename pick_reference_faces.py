@@ -314,28 +314,34 @@ def stage_apply(sel_path: Path, src: Path, dest: Path, progress=None) -> int:
         # Two source photos can share a stem (e.g. IMG_0001.jpg and IMG_0001.png,
         # or the same name in a case-sensitive folder). Don't overwrite a crop
         # that came from a different source: add a short deterministic suffix.
+        # If the existing file has no sidecar we cannot prove it came from this
+        # source, so also suffix instead of silently overwriting it.
         existing_sidecar = Path(str(out_path) + ".kps.json")
-        if out_path.exists() and existing_sidecar.exists():
-            try:
-                prev_src = json.loads(existing_sidecar.read_text(encoding="utf-8")).get("src")
-            except Exception:
-                prev_src = None
-            if prev_src and prev_src != s["file"]:
+        if out_path.exists():
+            prev_src = None
+            if existing_sidecar.exists():
+                try:
+                    prev_src = json.loads(existing_sidecar.read_text(encoding="utf-8")).get("src")
+                except Exception:
+                    prev_src = None
+            if prev_src != s["file"]:
                 tag = hashlib.sha1(s["file"].encode("utf-8")).hexdigest()[:6]
                 out_path = dest / f"{base_stem}_{tag}_face.jpg"
         crop.save(out_path, quality=92)
 
+        # Always write a sidecar with the source name. Landmarks are optional:
+        # when re-detection failed, the matcher can still fall back to detecting
+        # the face in the margin crop.
+        sidecar_data = {"src": s["file"]}
         extra = ""
         if kps_norm is not None:
             kps_px = np.asarray(kps_norm, dtype=np.float64) * np.array([w, h])
             kps_crop = (kps_px - np.array([cx1, cy1])) * scale
             kps_out = kps_crop / np.array([crop.width, crop.height])
-            sidecar = Path(str(out_path) + ".kps.json")
-            sidecar.write_text(json.dumps({
-                "src": s["file"],
-                "kps_norm": [[round(float(a), 6), round(float(b), 6)] for a, b in kps_out],
-            }, indent=1))
+            sidecar_data["kps_norm"] = [[round(float(a), 6), round(float(b), 6)]
+                                        for a, b in kps_out]
             extra = " + landmarks"
+        Path(str(out_path) + ".kps.json").write_text(json.dumps(sidecar_data, indent=1))
         print(f"wrote {out_path} ({crop.width}x{crop.height}){extra}")
         done += 1
     print(f"\nrefs ready: {done} crops in {dest}  ({skipped} skipped)")

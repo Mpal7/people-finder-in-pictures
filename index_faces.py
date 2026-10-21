@@ -181,7 +181,6 @@ def main() -> int:
                     done += 1
                 conn.commit()
                 processed += 1
-                msg = f"re-embedded {rel} ({done} faces, models={','.join(missing)})"
             else:
                 boxes, kpss = models.detect(bgr)
                 faces = []
@@ -201,7 +200,6 @@ def main() -> int:
                 db.store_image(conn, rel, size, mtime, w, h, det_config, gid, faces, emb)
                 total_faces_new += len(faces)
                 processed += 1
-                msg = f"indexed {rel} ({len(faces)} faces)"
 
             t_process += time.perf_counter() - t_start
         except Exception as e:

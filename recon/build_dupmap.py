@@ -37,7 +37,8 @@ def md5_file(path: str) -> str:
 
 
 def top_of(rel: str) -> str:
-    return rel.split(os.sep, 1)[0] if os.sep in rel else "(root)"
+    p = rel.replace("\\", "/")
+    return p.split("/", 1)[0] if "/" in p else "(root)"
 
 
 def main() -> int:

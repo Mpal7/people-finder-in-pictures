@@ -7,8 +7,10 @@ CR2 uses the embedded full-size JPEG preview (no demosaicing).
 from __future__ import annotations
 
 import csv
+import datetime
 import json
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -38,13 +40,18 @@ def load_folder_rank(path: str | Path | None) -> dict[str, int]:
     return {str(k): int(v) for k, v in data.items()}
 
 
+def _top_folder(relpath: str) -> str:
+    """Top-level folder for a relpath from either POSIX or Windows tooling."""
+    p = relpath.replace("\\", "/")
+    return p.split("/", 1)[0] if "/" in p else "(root)"
+
+
 def canonical_rank(relpath: str, folder_rank: dict[str, int] | None = None) -> int:
-    top = relpath.split(os.sep, 1)[0] if os.sep in relpath else "(root)"
-    return (folder_rank or {}).get(top, 0)
+    return (folder_rank or {}).get(_top_folder(relpath), 0)
 
 
 def top_of(relpath: str) -> str:
-    return relpath.split(os.sep, 1)[0] if os.sep in relpath else "(root)"
+    return _top_folder(relpath)
 
 
 def load_dup_map(csv_path: Path,
@@ -57,7 +64,7 @@ def load_dup_map(csv_path: Path,
     out: dict[str, tuple[int, bool]] = {}
     for gid, members in groups.items():
         members_sorted = sorted(members, key=lambda p: (-canonical_rank(p, folder_rank), p))
-        for i, rel in enumerate(members):
+        for i, rel in enumerate(members_sorted):
             out[rel] = (gid, i == 0)
     return out
 
@@ -83,12 +90,68 @@ def iter_images(root: Path, dup_map: dict[str, tuple[int, bool]] | None = None,
             yield rel
 
 
+def _register_heif() -> None:
+    """Best-effort pillow-heif registration (optional in minimal installs)."""
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+
+
+_EXIF_DATE_TAGS = (36867, 36868, 306)  # DateTimeOriginal, DateTimeDigitized, DateTime
+_EXIF_IFD = 0x8769
+
+
+def _parse_exif_date(value) -> str:
+    if not value:
+        return ""
+    m = re.match(r"^(\d{4})[:\-](\d{2})[:\-](\d{2})", str(value).strip())
+    if not m:
+        return ""
+    try:
+        d = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return ""
+    return d.isoformat()
+
+
+def image_date(path: Path) -> str:
+    """Capture date as ``YYYY-MM-DD``.
+
+    Reads EXIF DateTimeOriginal / DateTimeDigitized / DateTime (including the
+    Exif sub-IFD). Falls back to the file mtime when metadata is missing or the
+    format cannot deliver EXIF (some RAW formats). Never raises.
+    """
+    try:
+        from PIL import Image
+
+        _register_heif()
+        with Image.open(path) as img:
+            exif = img.getexif()
+            values = [exif.get(tag) for tag in _EXIF_DATE_TAGS]
+            try:
+                sub = exif.get_ifd(_EXIF_IFD)
+            except Exception:
+                sub = {}
+            values = [sub.get(36867), sub.get(36868)] + values
+            for value in values:
+                parsed = _parse_exif_date(value)
+                if parsed:
+                    return parsed
+    except Exception:
+        pass
+    try:
+        return datetime.date.fromtimestamp(path.stat().st_mtime).isoformat()
+    except OSError:
+        return ""
+
+
 def load_image(path: Path, max_side: int = 1600) -> np.ndarray:
     """Return RGB uint8 array, EXIF-corrected, max side limited. Read-only."""
     from PIL import Image, ImageOps
-    import pillow_heif
 
-    pillow_heif.register_heif_opener()
+    _register_heif()
     ext = path.suffix.lower()
     if ext in (".cr2", ".crw"):
         import io
@@ -129,8 +192,7 @@ def load_thumb(path: Path, px: int = 320, width_first: bool = False):
     if ext in (".cr2", ".crw"):
         img = Image.fromarray(load_image(path, max_side=max(px * 3, 900)))
     else:
-        import pillow_heif
-        pillow_heif.register_heif_opener()
+        _register_heif()
         img = Image.open(path)
         try:
             img.draft("RGB", (px * 2, px * 4) if width_first else (px * 2, px * 2))

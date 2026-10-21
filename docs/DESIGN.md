@@ -66,8 +66,15 @@ optional `--folder-rank` JSON map (higher rank wins; ties broken by path).
    model.
 3. z-normalize each model's score distribution across the gallery, fuse
    (weighted mean or max), rank faces, group them per image.
-4. Emit a static review page: original thumbnail, face crops, per-model scores,
-   checkboxes, score cutoff, and JSON selection export.
+4. If negative references are supplied, score each face against them too and
+   subtract a weighted penalty in the same z space. Only above-average negative
+   similarity is penalized, so a negative that resembles the whole gallery does
+   not distort the ranking.
+5. Emit a static review page: original thumbnail, EXIF capture date (file mtime
+   fallback), face crops, per-model scores, checkboxes, score cutoff, and JSON
+   selection export. Near-identical images are clustered by 64-bit dHash
+   (Hamming ≤ 6 by default, aspect-ratio gated) and shown as one representative
+   with an expandable "similar" set.
 
 Because embeddings are cached, changing references, weights or the score cutoff
 means a re-match in minutes, not a re-index.
@@ -109,6 +116,7 @@ positives on labeled camera photos.
 - Large age gaps are the hardest case; collect references from several eras.
 - Screenshots and photos without a visible face are not findable by face
   matching (the Faces view exists for the "any person" case).
-- Exact dedup only; recompressed WhatsApp copies and HEIC→JPG conversions are
-  not grouped (an optional perceptual pass could be added).
+- Perceptual grouping catches recompressed WhatsApp copies and HEIC→JPG
+  conversions, but not heavily cropped/rotated variants; dHash is not a
+  semantic duplicate detector.
 - Model weights are non-commercial research assets; see `NOTICE.md`.

@@ -4,6 +4,7 @@ Layout (all under <project>/people/<slug>/):
   refs_src/   - drop your source photos of this person here
   refs_pick/  - picker page + selection.json (which face is hers/his)
   refs/       - final face crops + .kps.json landmark sidecars
+  refs_neg/   - optional photos of look-alikes to suppress during matching
   runs/<ts>/  - per-match run: review/, scores_all.csv, selection.json
 
 Registry: <project>/data/people.json
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -59,7 +61,7 @@ def create(name: str, refs_dir_override: str | None = None) -> dict:
     if refs_dir_override:
         person["refs_dir"] = refs_dir_override
     d = person_dir(slug)
-    for sub in ("refs_src", "refs_pick", "refs", "runs"):
+    for sub in ("refs_src", "refs_pick", "refs", "refs_neg", "runs"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     data["people"].append(person)
     _save(data)
@@ -94,3 +96,45 @@ def add_run(slug: str, run: dict) -> None:
             p.setdefault("runs", []).append(run)
             _save(data)
             return
+
+
+def delete_run(slug: str, ts: str) -> dict | None:
+    """Delete one run directory and its registry entry. Leaves found/ copies."""
+    data = _load()
+    for p in data["people"]:
+        if p["slug"] != slug:
+            continue
+        runs = p.get("runs", [])
+        target = next((r for r in runs if r.get("ts") == ts), None)
+        if target is None:
+            return None
+        run_dir = (PROJECT / target["dir"]).resolve()
+        base = person_dir(slug).resolve()
+        if run_dir != base and base not in run_dir.parents:
+            raise ValueError("run path is outside the person directory")
+        if run_dir.is_dir():
+            shutil.rmtree(run_dir)
+        p["runs"] = [r for r in runs if r.get("ts") != ts]
+        _save(data)
+        return target
+    return None
+
+
+def delete(slug: str) -> dict | None:
+    """Delete a person's profile directory and registry entry.
+
+    ``found/<slug>/`` exports are deliberately kept: they are user-visible
+    copies, not application state. A custom external ``refs_dir`` is also left
+    alone; only ``people/<slug>/`` is removed.
+    """
+    data = _load()
+    target = next((p for p in data["people"] if p["slug"] == slug), None)
+    if target is None:
+        return None
+    d = person_dir(slug).resolve()
+    people_root = PEOPLE_DIR.resolve()
+    if d.exists() and d != people_root and people_root in d.parents:
+        shutil.rmtree(d)
+    data["people"] = [p for p in data["people"] if p["slug"] != slug]
+    _save(data)
+    return target

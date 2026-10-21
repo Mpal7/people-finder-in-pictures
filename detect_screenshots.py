@@ -63,7 +63,7 @@ def main() -> int:
     for i, r in enumerate(rows, 1):
         p = root / r["relpath"]
         if mode == "visual":
-            cls, reason = r["shot_class"], r["shot_reason"] or ""
+            reason = r["shot_reason"] or ""
             s = visual_score(p)
             if s >= VISUAL_T:
                 res = {"cls": 2, "reason": f"{reason}+visual({s})", "score": 0.9}

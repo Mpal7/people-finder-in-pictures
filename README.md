@@ -13,9 +13,11 @@ ever read.
 - **Resumable index** — SQLite face index, transaction per image; stop and
   restart any time. Adding a model later only computes the missing embeddings.
 - **Multiple people** — per-person reference sets, landmark-assisted alignment,
-  and match runs with a ranked review page.
+  negative (look-alike) references, and match runs with a ranked review page.
 - **Model ensemble** — InsightFace `w600k_r50` base, optionally AdaFace IR-101
   and LVFace-B, fused with per-model z-normalization.
+- **Review that stays readable** — EXIF capture dates, near-duplicate grouping
+  for WhatsApp/HEIC pairs, and a score filter.
 - **Faces view** — filter the whole collection to photos containing people;
   filter by face count, detection score, face size, folder and screenshot class.
 - **Screenshot filter** — classify phone screenshots (header pass + optional
@@ -25,6 +27,7 @@ ever read.
 - **Job manager** — indexing, scanning, matching and copying run as detached
   jobs with live progress, logs and a Stop button; they survive UI restarts.
 - **Local web UI** — FastAPI backend + vanilla JS frontend, no external assets.
+  Person/run deletion, index reset and a bounded thumbnail cache are built in.
 
 ## Requirements
 
@@ -108,9 +111,15 @@ the detected faces and one embedding vector per enabled model.
   live log.
 - **Embedding coverage** — how many faces have each model's embedding. The
   matcher automatically uses every fully-covered model and fuses them.
+- **Config line and reset** — the current detection config is shown under the
+  index card. Changing detection size or flip TTA warns that the next run will
+  re-detect every image; **Reset index...** deletes the SQLite index (photos,
+  references and runs are untouched) so you can rebuild from scratch.
 - **Unreadable files** — corrupt originals are reported and skipped, never
   modified.
-- **Settings** — collection root path.
+- **Settings** — collection root path and the thumbnail cache. The cache is
+  bounded (default 512 MB / 30 days, see `PHOTO_THUMB_CACHE_MB` and
+  `PHOTO_THUMB_CACHE_DAYS`) and can be cleared from the UI.
 
 Indexing time depends on CPU and collection size. As a reference point, a
 low-end 4-core CPU took about 12 h for ~20k images with `w600k` at detection
@@ -121,7 +130,8 @@ everything is resumable.
 ## 2. People — find someone in the collection
 
 Create a person (for example `Alice`), then work down the three steps in the
-person card.
+person card. **Delete person** removes `people/<slug>/` (references, picks and
+runs); exports already in `found/<slug>/` are deliberately kept.
 
 ### Step 1 — Reference photos
 
@@ -129,6 +139,14 @@ Collect **5–20 photos of the person** across different ages, angles and lighti
 and drop them into `people/<slug>/refs_src/` (or another folder and type its
 path). Then press **Scan folder**. Scanning detects all faces in each reference
 photo and builds the picker page.
+
+Optional but useful: put photos of **look-alikes** (other people the matcher
+keeps confusing with this person) into `people/<slug>/refs_neg/`. They are used
+automatically on the next match; the face nearest the frame center is taken
+from each photo. The matcher subtracts a penalty when a candidate resembles a
+negative more than the gallery average. The penalty is controlled by
+**negative weight** (default `0.5`, `0` disables it). Negatives need no picker:
+a single-person photo or a face crop works best.
 
 ### Step 2 — Pick the face
 
@@ -146,11 +164,21 @@ Choose how many top faces to review (default 1000) and press **Run match**. It
 embeds the references, scores every indexed face with max-cosine per model,
 z-normalizes, fuses, and generates the review page.
 
+The match card also exposes the CLI options: **fusion** (`mean`/`max`),
+**min z** (drop weak candidates before the review page), **weights** (for
+example `w600k=1,adaface=1.5`) and **negative weight**. **group similar photos**
+controls near-duplicate grouping in the review page (see below).
+
 ### Review and export
 
 **Open review** next to the run:
 
-- Cards are sorted best-first; each shows the photo, its score and face crops.
+- Cards are sorted best-first; each shows the photo, its capture date (EXIF,
+  falling back to file mtime), score and face crops.
+- Near-identical photos (WhatsApp re-encodes, HEIC→JPG pairs) are grouped by
+  perceptual hash. **group similar** is on by default: the best card gets a
+  `+N similar` button that expands the group. **Select shown** selects only the
+  cards currently visible, so hidden duplicates are not copied accidentally.
 - Filter with the score box, tick photos (or **Select shown** for everything
   above the cutoff), then **Export selection** — saved server-side.
 - Back in the app, **Copy to found/<slug>/** starts a copy job. Files are copied
@@ -158,6 +186,8 @@ z-normalizes, fuses, and generates the review page.
   copy is sha256-verified and listed in `found/<slug>/manifest.csv`.
 - Multiple review rounds: tick more, export again, copy again — files already
   copied are skipped.
+- Delete an obsolete run from the match table; its review page and selection are
+  removed, but photos already copied to `found/` are kept.
 
 Score guide (fused z, per collection): **≥ 8** near-certain (references that are
 copies of collection photos score ~14); **5–8** strong; **2.5–5** worth a look;
@@ -220,6 +250,10 @@ Examples:
     --src people/alice/refs_src --dest people/alice/refs
 .venv/bin/python match_person.py --root /mnt/foto/Foto --refs people/alice/refs \
     --out review/alice --top-faces 600
+# optional: suppress known look-alikes and tune fusion
+.venv/bin/python match_person.py --root /mnt/foto/Foto --refs people/alice/refs \
+    --neg-refs people/alice/refs_neg --neg-weight 0.5 --fusion mean \
+    --out review/alice --top-faces 600
 .venv/bin/python export_matches.py --root /mnt/foto/Foto \
     --selection review/alice/selection.json --dest found/alice --flat
 .venv/bin/python index_status.py --watch 60
@@ -234,6 +268,15 @@ Examples:
   `{"camera": 80, "phone_backup": 70, "exports": 10}` (higher wins; unlisted
   folders rank 0, ties broken by path).
 - `--retry-errors` retries previously unreadable files.
+
+`match_person.py` options worth knowing:
+
+- `--neg-refs DIR` adds look-alike negatives (see Step 1) and `--neg-weight`
+  sets the suppression strength (`0` disables it).
+- `--fusion mean|max`, `--weights model=value,...` and `--min-z` tune ranking.
+- `--near-dup-threshold 6` controls review grouping (`--no-near-dup` disables).
+- `--flip` / `--no-flip`, `--max-side` and `--models` override the index config
+  for reference embedding; the defaults come from the stored index config.
 
 `resume_index.sh` relaunches the indexer after a reboot with mount checks. It is
 configured through environment variables:
@@ -250,11 +293,13 @@ data/faces.db        shared face index (images, faces, embeddings)
 data/jobs.json       background job registry + per-job logs/progress
 data/config.json     UI settings (collection root)
 data/people.json     person registry
-people/<slug>/       per-person: refs_src/ refs_pick/ refs/ runs/
+data/thumbs_cache/   bounded thumbnail cache (safe to delete)
+people/<slug>/       per-person: refs_src/ refs_pick/ refs/ refs_neg/ runs/
 found/<slug>/        exported copies (flat) + manifest.csv
 models/              one-time model downloads (buffalo_l, AdaFace, LVFace)
 recon/               inventory / duplicate-map / timing scripts
 web/                 UI frontend
+tests/               dependency-light unit tests
 docs/DESIGN.md       technical design notes
 ```
 
@@ -284,8 +329,21 @@ All runtime data, models, personal folders and exports are git-ignored.
   the model ensemble and several reference eras are for.
 - **Index re-detect on resume** — expected if you changed detection size, flip
   TTA or max-side; those settings are part of the per-image config key.
-- **Duplicate-looking cards** — exact duplicates are indexed once, but
-  recompressed WhatsApp copies are not grouped; review them manually.
+- **Duplicate-looking cards** — exact duplicates are indexed once and
+  recompressed near-duplicates are grouped in the review page. If a pair is not
+  grouped, lower `--near-dup-threshold` (CLI) or turn grouping off to compare
+  them individually.
+
+## Tests
+
+The dependency-light helper tests (dates, perceptual grouping, thumbnail cache,
+review generation) run without models or FastAPI:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+CI runs the same suite on Python 3.10–3.12 (`.github/workflows/tests.yml`).
 
 ## License
 
