@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Family Photo Finder</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header>
+  <h1>Family Photo Finder</h1>
+  <nav>
+    <button data-view="dashboard">Dashboard</button>
+    <button data-view="people">People</button>
+    <button data-view="faces">Faces</button>
+    <button data-view="jobs">Jobs</button>
+  </nav>
+  <span id="rootInfo" class="muted"></span>
+</header>
+
+<main>
+  <section id="view-dashboard"></section>
+  <section id="view-people"></section>
+  <section id="view-faces" hidden></section>
+  <section id="view-person" hidden></section>
+  <section id="view-jobs" hidden></section>
+</main>
+
+<textarea id="scratch" hidden></textarea>
+<script src="/assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""Family Photo Finder - local web UI (127.0.0.1 only, fully offline).
+
+Run:  .venv/bin/python webapp.py            (http://127.0.0.1:8770)
+      .venv/bin/python webapp.py --port 9000
+
+The UI orchestrates the same resumable CLI tools used from the terminal:
+  index_faces.py          - build / extend the shared face index
+  pick_reference_faces.py - scan a person's reference photos, pick the right face
+  match_person.py         - match a person's refs against the index
+  export_matches.py       - copy the selected matches to found/<person>/
+
+Nothing leaves the machine; the collection is opened read-only.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+import time
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+PROJECT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT))
+
+from photo_finder import db as fdb  # noqa: E402
+from photo_finder import people as ppl  # noqa: E402
+from photo_finder.imaging import load_thumb  # noqa: E402
+from photo_finder.jobs import JobManager  # noqa: E402
+
+DATA = PROJECT / "data"
+DB_PATH = DATA / "faces.db"
+WEB = PROJECT / "web"
+FOUND = PROJECT / "found"
+RUNS_ROOT = PROJECT / "review"
+PY = sys.executable
+# No machine-specific default: set the collection root in Settings on first run.
+DEFAULT_ROOT = ""
+
+MODEL_ORDER = ["w600k", "adaface", "lvface"]
+
+
+# ---------------------------------------------------------------- config ---
+class Config(BaseModel):
+    root: str = DEFAULT_ROOT
+
+
+def load_config() -> dict:
+    p = DATA / "config.json"
+    if p.exists():
+        return json.loads(p.read_text(encoding="utf-8"))
+    cfg = {"root": DEFAULT_ROOT}
+    DATA.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(cfg, indent=1), encoding="utf-8")
+    return cfg
+
+
+def save_config(cfg: dict) -> None:
+    (DATA / "config.json").write_text(json.dumps(cfg, indent=1), encoding="utf-8")
+
+
+# ------------------------------------------------------------------- app ---
+jm = JobManager(DATA)
+app = FastAPI(title="Family Photo Finder (local)")
+
+(WEB).mkdir(exist_ok=True)
+ppl.PEOPLE_DIR.mkdir(parents=True, exist_ok=True)
+for d in (ppl.PEOPLE_DIR, RUNS_ROOT):
+    if d.exists():
+        app.mount(f"/files/{d.name}", StaticFiles(directory=str(d)), name=f"files-{d.name}")
+
+
+def index_stats() -> dict:
+    out = {"exists": DB_PATH.exists(), "images_ok": 0, "images_error": 0, "faces": 0,
+           "models": {}, "meta": {}, "db_mb": 0.0}
+    if not DB_PATH.exists():
+        return out
+    conn = fdb.connect(DB_PATH, create=False)
+    out["images_ok"] = conn.execute("SELECT COUNT(*) c FROM images WHERE status='ok'").fetchone()["c"]
+    out["images_error"] = conn.execute("SELECT COUNT(*) c FROM images WHERE status='error'").fetchone()["c"]
+    out["faces"] = conn.execute("SELECT COUNT(*) c FROM faces").fetchone()["c"]
+    out["models"] = {r["model"]: r["c"] for r in
+                     conn.execute("SELECT model, COUNT(*) c FROM embeddings GROUP BY model")}
+    out["meta"] = {r["key"]: r["value"] for r in conn.execute("SELECT key,value FROM meta")}
+    conn.close()
+    out["db_mb"] = round(DB_PATH.stat().st_size / 2**20, 1)
+    return out
+
+
+def index_status() -> dict:
+    st = index_stats()
+    total = int(st["meta"].get("run_total", 0) or 0)
+    done = st["images_ok"]
+    finished = st["meta"].get("run_finished_at")
+    running = jm.active("index") is not None
+    eta = None
+    avg = float(st["meta"].get("run_avg_s", 0) or 0)
+    if running and total and avg:
+        eta = round(avg * (total - done))
+    return {**st, "running": running, "finished_at": finished, "total": total, "eta_s": eta,
+            "active_job": jm.active("index")}
+
+
+def person_detail(slug: str) -> dict:
+    person = ppl.get(slug)
+    if not person:
+        raise HTTPException(404, f"no person '{slug}'")
+    d = ppl.person_dir(slug)
+    refs = ppl.refs_dir(person)
+    refs_files = [p for p in refs.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
+    kps = list(refs.glob("*.kps.json"))
+    picker_index = d / "refs_pick" / "index.html"
+    pick_sel = d / "refs_pick" / "selection.json"
+    picked = 0
+    if pick_sel.exists():
+        try:
+            sels = json.loads(pick_sel.read_text())
+            picked = sum(1 for s in sels.get("selections", []) if s.get("face") is not None)
+        except Exception:
+            pass
+    runs = []
+    for run in person.get("runs", []):
+        rd = PROJECT / run["dir"]
+        sel = rd / "selection.json"
+        meta = {}
+        if (rd / "run_meta.json").exists():
+            try:
+                meta = json.loads((rd / "run_meta.json").read_text())
+            except Exception:
+                meta = {}
+        sel_n = 0
+        if sel.exists():
+            try:
+                sel_n = len(json.loads(sel.read_text()).get("selection", []))
+            except Exception:
+                pass
+        runs.append({**run,
+                     "review_exists": (rd / "index.html").exists(),
+                     "meta": meta,
+                     "selection_n": sel_n,
+                     "exported_n": count_found(slug)})
+    found_count = count_found(slug)
+    jobs = [j for j in jm.list(30) if j.get("meta", {}).get("person") == slug]
+    return {"slug": slug, "name": person["name"], "refs_dir": str(refs),
+            "refs_count": len(refs_files), "kps_count": len(kps),
+            "picker_exists": picker_index.exists(),
+            "pick_selection": {"exists": pick_sel.exists(), "picked": picked},
+            "runs": runs, "found_count": found_count, "jobs": jobs[:8]}
+
+
+def count_found(slug: str) -> int:
+    fdir = FOUND / slug
+    if not fdir.exists():
+        return 0
+    return sum(1 for p in fdir.iterdir() if p.is_file() and p.name != "manifest.csv")
+
+
+# ---------------------------------------------------------------- models ---
+class IndexReq(BaseModel):
+    models: list[str] = ["w600k"]
+    flip: bool = True
+    det_sizes: str = "1280"
+
+
+class PersonReq(BaseModel):
+    name: str
+    refs_dir: str | None = None
+
+
+class ScanReq(BaseModel):
+    src: str | None = None
+
+
+class MatchReq(BaseModel):
+    top_faces: int = 1000
+    fusion: str = "mean"
+
+
+class ExportReq(BaseModel):
+    ts: str
+
+
+# ------------------------------------------------------------------ API ----
+@app.get("/api/state")
+def api_state():
+    cfg = load_config()
+    root = Path(cfg["root"]) if cfg.get("root") else None
+    st = index_stats()
+    total_faces = max(st["faces"], 1)
+    coverage = {m: {"count": st["models"].get(m, 0),
+                    "pct": round(100 * st["models"].get(m, 0) / total_faces, 1)}
+                for m in MODEL_ORDER}
+    return {
+        "root": cfg.get("root", ""),
+        "root_ok": bool(root and root.is_dir()),
+        "index": index_status(),
+        "coverage": coverage,
+        "screenshots": api_shots_status(),
+        "people": [{"slug": p["slug"], "name": p["name"],
+                    "runs": len(p.get("runs", []))} for p in ppl.list_all()],
+        "jobs": jm.list(20),
+        "found_total": sum(count_found(p["slug"]) for p in ppl.list_all()),
+    }
+
+
+@app.post("/api/config")
+def api_config(body: Config):
+    save_config({"root": body.root})
+    return {"ok": True, "root": body.root}
+
+
+@app.post("/api/index/start")
+def api_index_start(body: IndexReq):
+    if jm.active("index"):
+        raise HTTPException(409, "an index run is already active")
+    cfg = load_config()
+    if not cfg.get("root") or not Path(cfg["root"]).is_dir():
+        raise HTTPException(400, "collection root not set / not mounted - set it in Settings")
+    models = [m for m in body.models if m in MODEL_ORDER]
+    if not models:
+        raise HTTPException(400, "no models selected")
+    cmd = [PY, str(PROJECT / "index_faces.py"), cfg["root"], "--db", str(DB_PATH),
+           "--models", ",".join(models), "--det-sizes", body.det_sizes,
+           "--progress-json", "{progress}"]
+    if not body.flip:
+        cmd.append("--no-flip")
+    job = jm.start("index", cmd, f"Index faces ({'+'.join(models)})")
+    return {"ok": True, "job": job["id"]}
+
+
+@app.post("/api/index/stop")
+def api_index_stop():
+    job = jm.active("index")
+    if not job:
+        raise HTTPException(404, "no active index run")
+    jm.stop(job["id"])
+    return {"ok": True, "job": job["id"]}
+
+
+@app.post("/api/people")
+def api_people_create(body: PersonReq):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    p = ppl.create(name, body.refs_dir)
+    return {"ok": True, "person": p}
+
+
+@app.get("/api/people/{slug}")
+def api_person(slug: str):
+    return person_detail(slug)
+
+
+@app.post("/api/people/{slug}/refs/scan")
+def api_refs_scan(slug: str, body: ScanReq):
+    person = ppl.get(slug)
+    if not person:
+        raise HTTPException(404, "no such person")
+    if jm.active() and jm.active()["kind"] in ("scan",):
+        raise HTTPException(409, "a reference scan is already active")
+    d = ppl.person_dir(slug)
+    src = Path(body.src) if body.src else d / "refs_src"
+    if not src.is_dir():
+        raise HTTPException(400, f"folder not found: {src}")
+    images = [p for p in src.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp",
+                                                               ".heic", ".heif", ".cr2", ".dng")]
+    if not images:
+        raise HTTPException(400, f"no images in {src} - drop reference photos there first")
+    cmd = [PY, str(PROJECT / "pick_reference_faces.py"), "--src", str(src),
+           "--out", str(d / "refs_pick"), "--progress-json", "{progress}",
+           "--api-pick", f"/api/people/{slug}/refs/pick"]
+    job = jm.start("scan", cmd, f"Scan references ({len(images)} photos)", meta={"person": slug})
+    return {"ok": True, "job": job["id"], "images": len(images)}
+
+
+@app.post("/api/people/{slug}/refs/pick")
+def api_refs_pick(slug: str, payload: dict):
+    person = ppl.get(slug)
+    if not person:
+        raise HTTPException(404, "no such person")
+    d = ppl.person_dir(slug)
+    (d / "refs_pick").mkdir(parents=True, exist_ok=True)
+    picked = sum(1 for s in payload.get("selections", []) if s.get("face") is not None)
+    skipped = sum(1 for s in payload.get("selections", []) if s.get("skip"))
+    (d / "refs_pick" / "selection.json").write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    return {"ok": True, "n": picked + skipped, "picked": picked, "skipped": skipped}
+
+
+@app.post("/api/people/{slug}/refs/apply")
+def api_refs_apply(slug: str):
+    person = ppl.get(slug)
+    if not person:
+        raise HTTPException(404, "no such person")
+    d = ppl.person_dir(slug)
+    sel = d / "refs_pick" / "selection.json"
+    if not sel.exists():
+        raise HTTPException(400, "no picks saved yet - finish the picker page first")
+    src = d / "refs_src"
+    if not src.is_dir():
+        raise HTTPException(400, f"references folder missing: {src}")
+    cmd = [PY, str(PROJECT / "pick_reference_faces.py"), "--apply", str(sel),
+           "--src", str(src), "--dest", str(ppl.refs_dir(person)), "--progress-json", "{progress}"]
+    job = jm.start("apply", cmd, "Apply reference picks (crops + landmarks)", meta={"person": slug})
+    return {"ok": True, "job": job["id"]}
+
+
+@app.post("/api/people/{slug}/match")
+def api_match(slug: str, body: MatchReq):
+    person = ppl.get(slug)
+    if not person:
+        raise HTTPException(404, "no such person")
+    if jm.active("match"):
+        raise HTTPException(409, "a match run is already active")
+    cfg = load_config()
+    if not cfg.get("root") or not Path(cfg["root"]).is_dir():
+        raise HTTPException(400, "collection root not set / not mounted")
+    refs = ppl.refs_dir(person)
+    if not refs.is_dir() or not any(refs.glob("*.jpg")):
+        raise HTTPException(400, "no reference crops yet - run the picker/apply first")
+    if not DB_PATH.exists():
+        raise HTTPException(400, "no face index yet - run indexing first")
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    run_dir = ppl.person_dir(slug) / "runs" / ts
+    review_dir = run_dir / "review"
+    cmd = [PY, str(PROJECT / "match_person.py"), "--db", str(DB_PATH), "--root", cfg["root"],
+           "--refs", str(refs), "--out", str(review_dir), "--top-faces", str(body.top_faces),
+           "--fusion", body.fusion, "--progress-json", "{progress}",
+           "--api-review", f"/api/people/{slug}/review/{ts}/select"]
+    job = jm.start("match", cmd, f"Match '{person['name']}' (top {body.top_faces})", meta={"person": slug})
+    ppl.add_run(slug, {"ts": ts, "dir": str(run_dir.relative_to(PROJECT)),
+                       "top_faces": body.top_faces, "fusion": body.fusion, "job": job["id"],
+                       "review_url": f"/files/people/{slug}/runs/{ts}/review/index.html"})
+    return {"ok": True, "job": job["id"], "ts": ts}
+
+
+@app.post("/api/people/{slug}/review/{ts}/select")
+def api_review_select(slug: str, ts: str, payload: dict):
+    person = ppl.get(slug)
+    if not person:
+        raise HTTPException(404, "no such person")
+    run_dir = ppl.person_dir(slug) / "runs" / ts
+    if not run_dir.is_dir():
+        raise HTTPException(404, "no such run")
+    (run_dir / "selection.json").write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    scores = [float(s.get("score", 0)) for s in payload.get("selection", [])]
+    return {"ok": True, "n": len(scores), "min_score": min(scores) if scores else None,
+            "max_score": max(scores) if scores else None}
+
+
+@app.post("/api/people/{slug}/export")
+def api_export(slug: str, body: ExportReq):
+    person = ppl.get(slug)
+    if not person:
+        raise HTTPException(404, "no such person")
+    active = jm.active("export")
+    if active and active.get("meta", {}).get("person") == slug:
+        raise HTTPException(409, "a copy job for this person is already active")
+    cfg = load_config()
+    if not cfg.get("root") or not Path(cfg["root"]).is_dir():
+        raise HTTPException(400, "collection root not set / not mounted")
+    run_dir = ppl.person_dir(slug) / "runs" / body.ts
+    sel = run_dir / "selection.json"
+    if not sel.exists():
+        raise HTTPException(400, "no selection saved for this run yet")
+    dest = FOUND / slug
+    cmd = [PY, str(PROJECT / "export_matches.py"), "--root", cfg["root"],
+           "--selection", str(sel), "--dest", str(dest), "--flat",
+           "--progress-json", "{progress}"]
+    job = jm.start("export", cmd, f"Copy selection for '{person['name']}'",
+                   meta={"person": slug})
+    return {"ok": True, "job": job["id"], "dest": str(dest),
+            "count": count_found(slug)}
+
+
+@app.get("/api/jobs")
+def api_jobs():
+    return {"jobs": jm.list(50)}
+
+
+@app.post("/api/jobs/{jid}/stop")
+def api_job_stop(jid: str):
+    job = jm.stop(jid)
+    return {"ok": bool(job)}
+
+
+# ------------------------------------------------------------ any-people --
+THUMB_CACHE = DATA / "thumbs_cache"
+THUMB_CACHE.mkdir(parents=True, exist_ok=True)
+
+
+class FacesExportReq(BaseModel):
+    min_faces: int = 1
+    min_det: float = 0.5
+    min_face_pct: float = 0.0
+    folder: str = ""
+    sort: str = "faces"
+    shots: str = "all"
+    dest: str = "found/people"
+
+
+def _faces_where(min_faces, min_det, min_face_pct, folder, shots="all"):
+    conds, params = [], []
+    if folder:
+        conds.append("i.relpath LIKE ?")
+        params.append(f"%{folder}%")
+    if shots == "hide":
+        conds.append("COALESCE(i.shot_class,0) < 2")
+    elif shots == "hide2":
+        conds.append("COALESCE(i.shot_class,0) = 0")
+    elif shots == "only":
+        conds.append("COALESCE(i.shot_class,0) >= 2")
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    having = ("HAVING i.n_faces >= ? AND MAX(f.det_score) >= ? AND "
+              "MAX((json_extract(f.bbox_json,'$[3]') - json_extract(f.bbox_json,'$[1]')) "
+              "* 1.0 / NULLIF(i.height,0)) >= ?")
+    return where, params, having, [int(min_faces), float(min_det), float(min_face_pct)]
+
+
+def _faces_list(conn, min_faces, min_det, min_face_pct, folder, sort, limit=None, offset=0,
+                shots="all"):
+    where, params, having, hp = _faces_where(min_faces, min_det, min_face_pct, folder, shots)
+    order = {"faces": "i.n_faces DESC, mdet DESC", "recent": "i.mtime DESC",
+             "path": "i.relpath"}.get(sort, "i.n_faces DESC, mdet DESC")
+    base = f"FROM images i JOIN faces f ON f.image_id = i.id {where} GROUP BY i.id {having}"
+    total = conn.execute(f"SELECT COUNT(*) c FROM (SELECT i.id {base})", params + hp).fetchone()["c"]
+    agg = conn.execute(
+        f"SELECT COALESCE(SUM(sz),0) sb, COALESCE(SUM(nf),0) nf FROM (SELECT i.size sz, i.n_faces nf {base})",
+        params + hp).fetchone()
+    sql = (f"SELECT i.relpath p, i.n_faces nf, i.size sz, i.mtime mt, "
+           f"i.shot_class sc, i.shot_reason sr, "
+           f"MAX(f.det_score) mdet, "
+           f"MAX((json_extract(f.bbox_json,'$[3]') - json_extract(f.bbox_json,'$[1]')) "
+           f"* 1.0 / NULLIF(i.height,0)) mfr "
+           f"{base} ORDER BY {order}")
+    if limit is not None:
+        rows = conn.execute(sql + " LIMIT ? OFFSET ?", params + hp + [limit, offset]).fetchall()
+    else:
+        rows = conn.execute(sql, params + hp).fetchall()
+    return total, agg["sb"], agg["nf"], rows
+
+
+def _filters(min_faces, min_det, min_face_pct, folder, sort, shots="all"):
+    if not DB_PATH.exists():
+        raise HTTPException(400, "no face index yet - run indexing first")
+    conn = fdb.connect(DB_PATH, create=False)
+    try:
+        return _faces_list(conn, min_faces, min_det, min_face_pct / 100.0, folder, sort,
+                           shots=shots)
+    finally:
+        conn.close()
+
+
+def _safe_rel(path: str) -> Path:
+    rel = Path(path)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise HTTPException(400, "bad path")
+    cfg = load_config()
+    full = Path(cfg["root"]) / rel
+    if not full.is_file():
+        raise HTTPException(404, "not found")
+    return full
+
+
+def _cached_thumb(full: Path, rel: Path, px: int) -> Path:
+    st = full.stat()
+    key = hashlib.sha1(f"{rel}|{st.st_mtime_ns}|{st.st_size}|{px}".encode()).hexdigest()
+    out = THUMB_CACHE / f"{key}.jpg"
+    if not out.exists():
+        load_thumb(full, px).save(out, quality=80, optimize=True)
+    return out
+
+
+@app.get("/api/faces/images")
+def api_faces_images(min_faces: int = 1, min_det: float = 0.5, min_face_pct: float = 0.0,
+                     folder: str = "", sort: str = "faces", shots: str = "all",
+                     limit: int = 60, offset: int = 0):
+    limit = max(1, min(limit, 200))
+    total, bytes_total, faces_total, rows = _filters(min_faces, min_det, min_face_pct, folder, sort, shots)
+    rows = rows[offset: offset + limit]
+    items = [{"path": r["p"], "n_faces": r["nf"], "size": r["sz"], "mtime": r["mt"],
+              "max_det": round(r["mdet"], 3), "max_face_pct": round(100 * (r["mfr"] or 0), 1),
+              "shot_class": r["sc"] or 0, "shot_reason": r["sr"] or ""}
+             for r in rows]
+    return {"total": total, "bytes_total": bytes_total, "faces_total": faces_total,
+            "items": items, "offset": offset, "limit": limit}
+
+
+@app.get("/api/screenshots/status")
+def api_shots_status():
+    out = {"total": 0, "analyzed": 0, "possible": 0, "screenshots": 0,
+           "running": jm.active("shots") is not None}
+    if DB_PATH.exists():
+        conn = fdb.connect(DB_PATH, create=False)
+        r = conn.execute("""SELECT COUNT(*) t,
+                 SUM(CASE WHEN shot_class IS NOT NULL THEN 1 ELSE 0 END) a,
+                 SUM(CASE WHEN shot_class=1 THEN 1 ELSE 0 END) p,
+                 SUM(CASE WHEN shot_class=2 THEN 1 ELSE 0 END) s
+                 FROM images WHERE status='ok'""").fetchone()
+        conn.close()
+        out.update(total=r["t"], analyzed=r["a"] or 0, possible=r["p"] or 0, screenshots=r["s"] or 0)
+    return out
+
+
+class ShotsReq(BaseModel):
+    visual: bool = False
+
+
+@app.post("/api/screenshots/analyze")
+def api_shots_analyze(body: ShotsReq):
+    if jm.active("shots"):
+        raise HTTPException(409, "a screenshot analysis is already running")
+    cfg = load_config()
+    if not cfg.get("root") or not Path(cfg["root"]).is_dir():
+        raise HTTPException(400, "collection root not set / not mounted")
+    cmd = [PY, str(PROJECT / "detect_screenshots.py"), cfg["root"], "--db", str(DB_PATH),
+           "--progress-json", "{progress}"]
+    if body.visual:
+        cmd.append("--visual")
+    title = "Refine possible screenshots (visual)" if body.visual else "Scan screenshots (header pass)"
+    job = jm.start("shots", cmd, title)
+    return {"ok": True, "job": job["id"]}
+
+
+@app.get("/api/faces/thumb")
+def api_faces_thumb(path: str, px: int = 320):
+    rel = Path(path)
+    full = _safe_rel(path)
+    px = max(64, min(px, 1600))
+    return FileResponse(_cached_thumb(full, rel, px), media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=86400"})
+
+
+@app.get("/api/faces/view")
+def api_faces_view(path: str):
+    """Original for browser-friendly formats, large 1200px render otherwise."""
+    rel = Path(path)
+    full = _safe_rel(path)
+    if full.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
+        return FileResponse(full)
+    return FileResponse(_cached_thumb(full, rel, 1200), media_type="image/jpeg")
+
+
+@app.get("/api/faces/list.csv")
+def api_faces_csv(min_faces: int = 1, min_det: float = 0.5, min_face_pct: float = 0.0,
+                  folder: str = "", sort: str = "faces", shots: str = "all"):
+    total, bytes_total, faces_total, rows = _filters(min_faces, min_det, min_face_pct, folder, sort, shots)
+    lines = ["relpath,n_faces,size_bytes,max_det_score,max_face_pct,shoot_date"]
+    for r in rows:
+        lines.append(f'"{r["p"]}",{r["nf"]},{r["sz"]},{r["mdet"]:.3f},'
+                     f'{100 * (r["mfr"] or 0):.1f},{time.strftime("%Y-%m-%d", time.localtime(r["mt"]))}')
+    return Response("\n".join(lines) + "\n", media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=people_photos.csv"})
+
+
+@app.post("/api/faces/export")
+def api_faces_export(body: FacesExportReq):
+    cfg = load_config()
+    raw = (body.dest or "").strip()
+    if not raw:
+        raise HTTPException(400, "destination folder required")
+    dest_path = Path(raw).expanduser()
+    if not dest_path.is_absolute():
+        dest_path = PROJECT / dest_path
+    dest_path = dest_path.resolve()
+    root_path = Path(cfg["root"]).resolve() if cfg.get("root") else None
+    if root_path and (dest_path == root_path or root_path in dest_path.parents):
+        raise HTTPException(400, "destination must be OUTSIDE the collection (originals stay read-only)")
+    if dest_path.exists() and not dest_path.is_dir():
+        raise HTTPException(400, "destination exists and is not a directory")
+    total, bytes_total, faces_total, rows = _filters(body.min_faces, body.min_det,
+                                                     body.min_face_pct, body.folder, body.sort,
+                                                     body.shots)
+    if total == 0:
+        raise HTTPException(400, "no photos match the filters")
+    exp_dir = DATA / "exports"
+    exp_dir.mkdir(exist_ok=True)
+    sel = exp_dir / f"{time.strftime('%Y%m%d-%H%M%S')}.json"
+    sel.write_text(json.dumps({
+        "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "selection": [{"path": r["p"], "score": r["nf"]} for r in rows],
+    }, indent=1), encoding="utf-8")
+    cmd = [PY, str(PROJECT / "export_matches.py"), "--root", cfg["root"],
+           "--selection", str(sel), "--dest", str(dest_path), "--flat",
+           "--progress-json", "{progress}"]
+    job = jm.start("export", cmd, f"Copy {total} photos to {dest_path}",
+                   meta={"dest": str(dest_path), "count": total})
+    return {"ok": True, "job": job["id"], "count": total, "bytes": bytes_total,
+            "dest": str(dest_path)}
+
+
+@app.get("/")
+def root():
+    return FileResponse(WEB / "index.html")
+
+
+if (WEB / "app.js").exists():
+    app.mount("/assets", StaticFiles(directory=str(WEB)), name="assets")
+
+
+def main() -> int:
+    import argparse
+
+    import uvicorn
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=8770)
+    ap.add_argument("--host", default="127.0.0.1")
+    args = ap.parse_args()
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print("WARNING: binding to a non-loopback address exposes your photo collection "
+              "and the unauthenticated API to your network. Keep the default for local use.")
+    print(f"Family Photo Finder UI -> http://{args.host}:{args.port}")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

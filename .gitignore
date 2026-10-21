@@ -1,0 +1,23 @@
+.venv/
+models/
+recon/out/
+
+# Runtime data (index, jobs, settings, people, exports, review pages)
+data/
+people/
+review/
+found/
+
+# Legacy/top-level picker outputs
+refs/
+refs_pick/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.DS_Store

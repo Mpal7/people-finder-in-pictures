@@ -1,0 +1,18 @@
+# Runtime dependencies (Python 3.10-3.12, CPU-only is fine).
+fastapi>=0.110,<1
+uvicorn>=0.29,<1
+pydantic>=2.6,<3
+
+numpy>=1.26,<2
+tqdm>=4.66
+
+# Face detection + recognition. insightface bundles SCRFD and w600k_r50
+# (buffalo_l); onnxruntime runs the additional embedding models.
+insightface>=0.7.3
+onnxruntime>=1.17
+opencv-python-headless>=4.9
+
+# Image formats
+pillow>=10.0
+pillow-heif>=0.16
+rawpy>=0.19
