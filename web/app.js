@@ -1,4 +1,4 @@
-/* Family Photo Finder - frontend (vanilla, no external resources) */
+/* People Finder - frontend (vanilla, no external resources) */
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 

@@ -1,8 +1,8 @@
-# Family Photo Finder
+# People Finder
 
 **No cloud, no accounts, no uploads — your photos never leave your machine.**
 
-Family Photo Finder is a local, offline face-recognition tool for personal photo
+People Finder is a local, offline face-recognition tool for personal photo
 collections. Build a resumable face index once, then use it in two ways:
 
 - **Find a person** — give it 5–20 reference photos, review the ranked matches,
@@ -40,8 +40,8 @@ Originals are only ever read. Everything runs on your hardware.
 ## Install
 
 ```bash
-git clone <this-repo> family-photo-finder
-cd family-photo-finder
+git clone <this-repo> people-finder
+cd people-finder
 ./setup.sh
 ```
 

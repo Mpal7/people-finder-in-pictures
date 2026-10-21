@@ -1,6 +1,6 @@
 # Design notes
 
-Technical background for Family Photo Finder: why the pipeline looks the way it
+Technical background for People Finder: why the pipeline looks the way it
 does, what each stage does, and where its limits are. The README covers usage;
 this document covers the reasoning.
 

@@ -85,7 +85,7 @@ HTML = """<!doctype html>
 </head>
 <body>
 <header>
-  <h1>Family photo review</h1>
+  <h1>Photo review</h1>
   <span class="muted" id="summary"></span>
   <label>show score &ge; <input type="number" id="cutoff" step="0.01" value="0"></label>
   <label id="groupWrap"><input type="checkbox" id="groupDups" checked> group similar</label>

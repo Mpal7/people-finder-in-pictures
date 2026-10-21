@@ -1,4 +1,4 @@
-"""Family photo finder: local, fully offline face indexing and matching.
+"""People Finder: local, fully offline face indexing and matching.
 
 Modules:
   imaging - image loading (EXIF, HEIC/CR2/DNG), duplicate-map helpers

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time model downloads for the family photo finder.
+"""One-time model downloads for People Finder.
 
 This is the ONLY script in the project that accesses the network (besides pip).
 It fetches, once:

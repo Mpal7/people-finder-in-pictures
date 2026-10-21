@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Family Photo Finder - local web UI (127.0.0.1 only, fully offline).
+"""People Finder - local web UI (127.0.0.1 only, fully offline).
 
 Run:  .venv/bin/python webapp.py            (http://127.0.0.1:8770)
       .venv/bin/python webapp.py --port 9000
@@ -66,7 +66,7 @@ def save_config(cfg: dict) -> None:
 
 # ------------------------------------------------------------------- app ---
 jm = JobManager(DATA)
-app = FastAPI(title="Family Photo Finder (local)")
+app = FastAPI(title="People Finder (local)")
 THUMB_CACHE = ThumbCache(DATA / "thumbs_cache")
 
 (WEB).mkdir(exist_ok=True)
@@ -726,7 +726,7 @@ def main() -> int:
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print("WARNING: binding to a non-loopback address exposes your photo collection "
               "and the unauthenticated API to your network. Keep the default for local use.")
-    print(f"Family Photo Finder UI -> http://{args.host}:{args.port}")
+    print(f"People Finder UI -> http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 
