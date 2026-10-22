@@ -11,10 +11,12 @@ import os
 import time
 from pathlib import Path
 
+from .paths import expand_path
+
 
 class Progress:
     def __init__(self, path: str | Path | None):
-        self.path = Path(path) if path else None
+        self.path = expand_path(path) if path else None
 
     def write(self, **fields) -> None:
         if self.path is None:

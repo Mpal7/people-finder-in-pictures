@@ -8,7 +8,9 @@ tqdm>=4.66
 
 # Face detection + recognition. insightface bundles SCRFD and w600k_r50
 # (buffalo_l); onnxruntime runs the additional embedding models.
-insightface>=0.7.3
+# 1.x ships a pure-Python wheel (no C++ compiler needed on Windows). Keep <2
+# until the 2.x API has been validated against this pipeline.
+insightface>=1.0.1,<2
 onnxruntime>=1.17
 opencv-python-headless>=4.9
 

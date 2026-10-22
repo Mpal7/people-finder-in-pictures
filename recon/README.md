@@ -1,8 +1,8 @@
 # Phase 0 recon (read-only)
 
-Tiny scripts that inventory the mounted collection and measure real speed on
-this machine. Nothing here writes to the collection; the only network access is
-`setup_models.py` (one-time model downloads).
+Tiny scripts that inventory any photo collection folder and measure real speed
+on this machine. Nothing here writes to the collection; the only network access
+is `setup_models.py` (one-time model downloads).
 
 ## Scripts
 
@@ -15,16 +15,25 @@ this machine. Nothing here writes to the collection; the only network access is
 
 Run everything from the project root with the project venv:
 
+```powershell
+# Windows
+.\.venv\Scripts\python.exe recon\inventory.py "D:\Photos"
+.\.venv\Scripts\python.exe recon\build_dupmap.py "D:\Photos"
+.\.venv\Scripts\python.exe recon\setup_models.py
+.\.venv\Scripts\python.exe recon\sample_timing.py "D:\Photos" --n 300
+```
+
 ```bash
-.venv/bin/python recon/inventory.py "<root>"
-.venv/bin/python recon/build_dupmap.py "<root>"
+# Linux
+.venv/bin/python recon/inventory.py "/mnt/foto/Foto"
+.venv/bin/python recon/build_dupmap.py "/mnt/foto/Foto"
 .venv/bin/python recon/setup_models.py
-.venv/bin/python recon/sample_timing.py "<root>" --n 300
+.venv/bin/python recon/sample_timing.py "/mnt/foto/Foto" --n 300
 ```
 
 ## Notes
 
-- `<root>` is the mounted photo collection folder.
+- `<root>` is any folder containing the photos (local, removable, or network).
 - `sample_timing.py --det-sizes 640,1280` times SCRFD-10G at both scales; faces
   are taken from the last (largest) size for the embedding stage.
 - Exact duplicates are detected at byte level only; recompressed WhatsApp

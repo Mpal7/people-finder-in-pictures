@@ -17,6 +17,8 @@ import shutil
 import time
 from pathlib import Path
 
+from .paths import expand_path
+
 PROJECT = Path(__file__).resolve().parents[1]
 PEOPLE_DIR = PROJECT / "people"
 REGISTRY = PROJECT / "data" / "people.json"
@@ -46,7 +48,7 @@ def refs_dir(person: dict) -> Path:
     """Reference crops directory (absolute)."""
     r = person.get("refs_dir")
     if r:
-        p = Path(r)
+        p = expand_path(r)
         return p if p.is_absolute() else PROJECT / p
     return person_dir(person["slug"]) / "refs"
 
@@ -59,7 +61,7 @@ def create(name: str, refs_dir_override: str | None = None) -> dict:
         slug, n = f"{base}-{n}", n + 1
     person = {"slug": slug, "name": name, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "runs": []}
     if refs_dir_override:
-        person["refs_dir"] = refs_dir_override
+        person["refs_dir"] = str(expand_path(refs_dir_override))
     d = person_dir(slug)
     for sub in ("refs_src", "refs_pick", "refs", "refs_neg", "runs"):
         (d / sub).mkdir(parents=True, exist_ok=True)

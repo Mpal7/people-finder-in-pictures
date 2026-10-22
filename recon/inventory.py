@@ -80,11 +80,11 @@ def walk(root: str):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("root", help="collection root (the mounted photo folder)")
+    ap.add_argument("root", help="collection root (any folder with photos)")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "out"))
     args = ap.parse_args()
 
-    root = os.path.abspath(args.root)
+    root = os.path.abspath(os.path.expandvars(os.path.expanduser(args.root)))
     if not os.path.isdir(root):
         print(f"ERROR: not a directory: {root}", file=sys.stderr)
         return 1

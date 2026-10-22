@@ -25,6 +25,53 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parents[1]
 
 
+def _popen_kwargs(log_fh) -> dict:
+    """Make jobs survive the UI process on both Windows and POSIX."""
+    kwargs = {
+        "cwd": str(PROJECT),
+        "stdout": log_fh,
+        "stderr": subprocess.STDOUT,
+        "stdin": subprocess.DEVNULL,
+        # Worker output is often redirected to a log file. Force UTF-8 so
+        # photo paths with non-ASCII characters do not crash on Windows.
+        "env": {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+    }
+    if os.name == "nt":
+        # DETACHED_PROCESS keeps the worker alive after the console/server
+        # exits; without it, closing the terminal can terminate indexing.
+        kwargs["creationflags"] = subprocess.DETACHED_PROCESS
+    else:
+        # New session = no controlling terminal, so Ctrl-C in the UI does not
+        # also interrupt the detached worker.
+        kwargs["start_new_session"] = True
+    return kwargs
+
+
+def _terminate_tree(pid: int) -> None:
+    """Stop a job and its children.
+
+    On Windows, ``.venv\\Scripts\\python.exe`` is a launcher that spawns the
+    real interpreter as a child. Terminating only the launcher would leave the
+    indexer running in the background, so use ``taskkill /T`` there.
+    """
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return
+        except OSError:
+            pass
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        pass
+
+
 def pid_alive(pid: int) -> bool:
     """True only for a live process; zombies count as dead.
 
@@ -94,7 +141,7 @@ class JobManager:
 
     def _log_tail(self, job: dict, lines: int = 15) -> list[str]:
         try:
-            text = Path(job["log"]).read_text(errors="replace")
+            text = Path(job["log"]).read_text(encoding="utf-8", errors="replace")
         except Exception:
             return []
         clean = [ln.rstrip() for ln in text.replace("\r", "\n").splitlines()]
@@ -111,7 +158,7 @@ class JobManager:
         progress = self.jobs_dir / f"{jid}.progress.json"
         cmd = [a.replace("{progress}", str(progress)).replace("{log}", str(log)) for a in cmd]
         log_fh = open(log, "ab")
-        proc = subprocess.Popen(cmd, cwd=str(PROJECT), stdout=log_fh, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, **_popen_kwargs(log_fh))
         log_fh.close()
         self._procs[jid] = proc
         job = {
@@ -128,7 +175,7 @@ class JobManager:
     def refresh(self) -> None:
         changed = False
         for job in self.jobs:
-            if job["status"] != "running":
+            if job["status"] not in ("running", "stopping"):
                 continue
             proc = self._procs.get(job["id"])
             if proc is not None:
@@ -151,15 +198,8 @@ class JobManager:
 
     def stop(self, jid: str) -> dict:
         for job in self.jobs:
-            if job["id"] == jid and job["status"] == "running":
-                proc = self._procs.get(jid)
-                try:
-                    if proc is not None:
-                        proc.terminate()
-                    else:
-                        os.kill(job["pid"], signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
+            if job["id"] == jid and job["status"] in ("running", "stopping"):
+                _terminate_tree(job["pid"])
                 job["status"] = "stopping"
                 self._save()
                 return job

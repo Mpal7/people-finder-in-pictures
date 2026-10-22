@@ -23,6 +23,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 
+from photo_finder.paths import expand_path  # noqa: E402
 from photo_finder.screenshots import visual_score  # noqa: E402
 
 
@@ -33,11 +34,12 @@ def main() -> int:
     ap.add_argument("--db", default=str(PROJECT / "data" / "faces.db"))
     args = ap.parse_args()
 
-    root = Path(args.root)
-    if not (Path(args.db)).exists():
-        print(f"no database at {args.db}", file=sys.stderr)
+    root = expand_path(args.root)
+    db_path = expand_path(args.db)
+    if not db_path.exists():
+        print(f"no database at {db_path}", file=sys.stderr)
         return 1
-    conn = sqlite3.connect(args.db)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     rng = random.Random(11)
 

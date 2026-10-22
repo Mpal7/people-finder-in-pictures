@@ -10,6 +10,11 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! "$PYTHON" -c 'import struct, sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] <= (3, 12) and struct.calcsize("P") == 8 else 1)'; then
+  echo "64-bit Python 3.10-3.12 is required (found $("$PYTHON" -V 2>&1))" >&2
+  exit 1
+fi
+
 if [[ ! -d .venv ]]; then
   echo "creating virtualenv (.venv)..."
   "$PYTHON" -m venv .venv

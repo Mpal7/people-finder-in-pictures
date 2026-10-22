@@ -16,11 +16,13 @@ import os
 import sys
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
 MODELS = PROJECT / "models"
 
+BUFFALO_URL = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
 ADA_URL = "https://github.com/yakhyo/adaface-onnx/releases/download/weights/adaface_ir_101.onnx"
 LVFACE_URL = "https://huggingface.co/bytedance-research/LVFace/resolve/main/LVFace-B_Glint360K/LVFace-B_Glint360K.onnx"
 
@@ -37,7 +39,7 @@ def fetch(url: str, dest: Path) -> None:
     tmp = dest.with_suffix(dest.suffix + ".part")
     print(f"downloading {url}")
     t0 = time.time()
-    with urllib.request.urlopen(url) as r, open(tmp, "wb") as f:
+    with urllib.request.urlopen(url, timeout=60) as r, open(tmp, "wb") as f:
         total = int(r.headers.get("Content-Length", 0))
         done = 0
         next_report = 0
@@ -55,18 +57,47 @@ def fetch(url: str, dest: Path) -> None:
     print(f"saved: {dest} ({human(dest.stat().st_size)})")
 
 
+def ensure_buffalo(insight_root: Path) -> Path:
+    """Download and unzip buffalo_l with urllib.
+
+    InsightFace's own downloader uses requests/certifi. On Windows, especially
+    behind a corporate TLS proxy, the OS certificate store (used by urllib)
+    is often the only one that verifies. Doing the download here keeps setup
+    working on both platforms.
+    """
+    models_dir = insight_root / "models"
+    model_dir = models_dir / "buffalo_l"
+    required = [model_dir / "det_10g.onnx", model_dir / "w600k_r50.onnx"]
+    if all(p.exists() and p.stat().st_size > 0 for p in required):
+        print(f"exists: {model_dir}")
+        return model_dir
+
+    zip_path = models_dir / "buffalo_l.zip"
+    fetch(BUFFALO_URL, zip_path)
+    print(f"extracting {zip_path} ...")
+    model_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(model_dir)
+    zip_path.unlink(missing_ok=True)
+    missing = [p.name for p in required if not (p.exists() and p.stat().st_size > 0)]
+    if missing:
+        raise RuntimeError(f"buffalo_l archive is missing: {', '.join(missing)}")
+    return model_dir
+
+
 def main() -> int:
-    # 1) InsightFace buffalo_l (downloads + verifies the pack via the library)
+    # 1) InsightFace buffalo_l (download, then load once to verify ONNX)
     from insightface.app import FaceAnalysis
 
-    insight_root = str(MODELS / "insightface")
+    insight_root = MODELS / "insightface"
+    model_dir = ensure_buffalo(insight_root)
     app = FaceAnalysis(
         name="buffalo_l",
-        root=insight_root,
+        root=str(insight_root),
         allowed_modules=["detection", "recognition"],
+        providers=["CPUExecutionProvider"],
     )
-    model_dir = Path(app.model_dir)
-    print(f"buffalo_l ready at {model_dir}")
+    print(f"buffalo_l ready at {Path(app.model_dir)}")
     for f in sorted(model_dir.glob("*.onnx")):
         print(f"  {f.name:24} {human(f.stat().st_size)}")
 

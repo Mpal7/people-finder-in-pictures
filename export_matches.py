@@ -15,12 +15,12 @@ import argparse
 import csv
 import hashlib
 import json
-import os
 import shutil
 import sys
 import time
 from pathlib import Path
 
+from photo_finder.paths import expand_path, is_within, rel_parts
 from photo_finder.progress import Progress
 
 PROJECT = Path(__file__).resolve().parent
@@ -49,7 +49,7 @@ def same_content(src: Path, dst: Path, no_sha256: bool) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--root", required=True, help="collection root (read-only)")
+    ap.add_argument("--root", required=True, help="collection root (any folder; read-only recommended)")
     ap.add_argument("--selection", required=True, help="selection.json exported from the review page")
     ap.add_argument("--dest", default=str(PROJECT / "found"), help="destination folder for copies")
     ap.add_argument("--flat", action="store_true", help="copy all files directly into the dest root (no subfolders); renames on collision")
@@ -60,13 +60,17 @@ def main() -> int:
 
     prog = Progress(args.progress_json)
 
-    root = Path(os.path.abspath(args.root))
-    dest = Path(os.path.abspath(args.dest))
-    if str(dest).startswith(str(root) + os.sep) or str(root).startswith(str(dest) + os.sep):
+    root = expand_path(args.root).resolve()
+    dest = expand_path(args.dest).resolve()
+    if not root.is_dir():
+        print(f"ERROR: collection root not found: {root}", file=sys.stderr)
+        return 1
+    if is_within(dest, root) or is_within(root, dest):
         print("ERROR: destination must be outside the collection root", file=sys.stderr)
         return 1
 
-    sel = json.loads(Path(args.selection).read_text(encoding="utf-8"))
+    sel_path = expand_path(args.selection)
+    sel = json.loads(sel_path.read_text(encoding="utf-8"))
     items = sel.get("selection", sel if isinstance(sel, list) else [])
     if not items:
         print("ERROR: empty selection", file=sys.stderr)
@@ -88,18 +92,20 @@ def main() -> int:
                        detail=item["path"] if isinstance(item, dict) else item)
             rel = item["path"] if isinstance(item, dict) else item
             score = item.get("score", "") if isinstance(item, dict) else ""
-            rel_norm = os.path.normpath(rel)
-            if os.path.isabs(rel_norm) or rel_norm.startswith("..") or rel_norm != rel:
+            try:
+                parts = rel_parts(rel)
+            except ValueError:
                 print(f"ERROR: suspicious path in selection: {rel}", file=sys.stderr)
                 failed += 1
                 continue
-            src = root / rel_norm
+            rel_display = "/".join(parts)
+            src = root.joinpath(*parts)
             if not src.is_file():
                 print(f"ERROR: source missing: {src}", file=sys.stderr)
                 failed += 1
                 continue
             if args.flat:
-                name = Path(rel_norm).name
+                name = parts[-1]
                 dst = dest / name
                 if dst.exists() and not same_content(src, dst, args.no_sha256):
                     n = 2
@@ -111,8 +117,8 @@ def main() -> int:
                         n += 1
                 file_col = dst.name
             else:
-                dst = dest / rel_norm
-                file_col = rel_norm
+                dst = dest.joinpath(*parts)
+                file_col = rel_display
             if dst.exists() and same_content(src, dst, args.no_sha256):
                 skipped += 1
                 continue
@@ -126,7 +132,7 @@ def main() -> int:
                 digest = "" if args.no_sha256 else sha256_file(dst)
                 size = dst.stat().st_size
                 total_bytes += size
-                w.writerow([file_col, rel_norm, score, size, digest, time.strftime("%Y-%m-%d %H:%M:%S")])
+                w.writerow([file_col, rel_display, score, size, digest, time.strftime("%Y-%m-%d %H:%M:%S")])
                 copied += 1
             except Exception as e:
                 print(f"ERROR copying {rel}: {type(e).__name__}: {e}", file=sys.stderr)

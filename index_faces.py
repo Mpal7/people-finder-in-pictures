@@ -31,6 +31,7 @@ from photo_finder import db
 from photo_finder.imaging import (iter_images, load_dup_map, load_folder_rank,
                                   load_image)
 from photo_finder.models import FaceModels, aligned_crop
+from photo_finder.paths import expand_path, is_within
 from photo_finder.progress import Progress
 
 PROJECT = Path(__file__).resolve().parent
@@ -44,7 +45,7 @@ def fmt_h(seconds: float) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("root", help="collection root (mounted read-only)")
+    ap.add_argument("root", help="collection root (any folder; read-only recommended)")
     ap.add_argument("--db", default=str(DEFAULT_DB))
     ap.add_argument("--dedup", default=str(PROJECT / "recon" / "out" / "duplicates.csv"),
                     help="duplicates.csv from Phase 0; index one canonical copy per group")
@@ -66,9 +67,12 @@ def main() -> int:
     ap.add_argument("--progress-json", default="", help="write live progress JSON here (web UI)")
     args = ap.parse_args()
 
-    root = Path(os.path.abspath(args.root))
-    db_path = Path(os.path.abspath(args.db))
-    if str(db_path).startswith(str(root) + os.sep):
+    root = expand_path(args.root).resolve()
+    db_path = expand_path(args.db).resolve()
+    if not root.is_dir():
+        print(f"ERROR: collection root not found: {root}", file=sys.stderr)
+        return 1
+    if is_within(db_path, root):
         print("ERROR: refusing to put the database inside the photo collection", file=sys.stderr)
         return 1
 
@@ -76,18 +80,19 @@ def main() -> int:
     det_sizes = tuple(int(s) for s in args.det_sizes.split(",") if s)
 
     dup_map = None
-    if not args.include_non_canonical and Path(args.dedup).exists():
-        folder_rank = load_folder_rank(args.folder_rank)
+    dedup_path = expand_path(args.dedup)
+    if not args.include_non_canonical and dedup_path.exists():
+        folder_rank = load_folder_rank(expand_path(args.folder_rank) if args.folder_rank else None)
         if folder_rank:
             print(f"folder-rank preferences: {len(folder_rank)} folders")
-        dup_map = load_dup_map(Path(args.dedup), folder_rank)
+        dup_map = load_dup_map(dedup_path, folder_rank)
         print(f"dedup map: {len(dup_map)} files in groups; indexing canonical copies only")
     rels = list(iter_images(root, dup_map, args.include_non_canonical))
     if args.limit:
         rels = rels[: args.limit]
     print(f"images to consider: {len(rels)}")
 
-    log_path = Path(args.log)
+    log_path = expand_path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fh = open(log_path, "a", encoding="utf-8")
     def log(msg: str) -> None:

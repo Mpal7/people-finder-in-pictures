@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from photo_finder.imaging import IMAGE_EXT, load_image
 from photo_finder.models import FaceModels
+from photo_finder.paths import expand_path
 from photo_finder.progress import Progress
 
 PROJECT = Path(__file__).resolve().parent
@@ -362,7 +363,7 @@ def main() -> int:
     args = ap.parse_args()
 
     prog = Progress(args.progress_json)
-    src = Path(args.src)
+    src = expand_path(args.src)
     if not src.is_dir():
         print(f"ERROR: {src} is not a directory", file=sys.stderr)
         return 1
@@ -370,8 +371,8 @@ def main() -> int:
         if not args.dest:
             print("ERROR: --dest is required with --apply", file=sys.stderr)
             return 1
-        return stage_apply(Path(args.apply), src, Path(args.dest), progress=prog)
-    return stage_build(src, Path(args.out), progress=prog, api_pick=args.api_pick)
+        return stage_apply(expand_path(args.apply), src, expand_path(args.dest), progress=prog)
+    return stage_build(src, expand_path(args.out), progress=prog, api_pick=args.api_pick)
 
 
 if __name__ == "__main__":

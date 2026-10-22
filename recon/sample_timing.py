@@ -185,7 +185,7 @@ def main() -> int:
     ap.add_argument("--face-cap", default="", help="per-model face count cap, e.g. adaface=120,lvface=80")
     args = ap.parse_args()
 
-    root = Path(os.path.abspath(args.root))
+    root = Path(os.path.abspath(os.path.expandvars(os.path.expanduser(args.root))))
     OUT.mkdir(parents=True, exist_ok=True)
     det_sizes = [int(s) for s in args.det_sizes.split(",") if s]
     caps = {}

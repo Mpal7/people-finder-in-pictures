@@ -20,6 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .paths import expand_path
+
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*estimate.*deprecated.*")
 
 MODEL_NAMES = ("w600k", "adaface", "lvface")
@@ -35,6 +37,7 @@ class _OnnxEmbedder:
 
     def __init__(self, name: str, model_path: str, rgb: bool, threads: int = 4):
         import onnxruntime
+        model_path = str(expand_path(model_path))
         if not Path(model_path).exists():
             raise FileNotFoundError(f"{name}: model not found at {model_path}")
         so = onnxruntime.SessionOptions()
@@ -80,7 +83,7 @@ class FaceModels:
         from insightface.app import FaceAnalysis
         self.app = FaceAnalysis(
             name="buffalo_l",
-            root=insightface_root,
+            root=str(expand_path(insightface_root)),
             allowed_modules=["detection", "recognition"],
             providers=["CPUExecutionProvider"],
         )

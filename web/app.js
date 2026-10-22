@@ -45,7 +45,8 @@ function jobTable(jobs, showPerson = false) {
     const detail = p.detail ? ` &middot; ${esc(p.detail)}` : '';
     const log = (j.log_tail && j.log_tail.length)
       ? `<details><summary class="muted">log</summary><pre class="log">${esc(j.log_tail.join('\n'))}</pre></details>` : '';
-    const stop = j.status === 'running' ? `<button class="secondary" onclick="stopJob('${j.id}')">Stop</button>` : '';
+    const stop = (j.status === 'running' || j.status === 'stopping')
+      ? `<button class="secondary" onclick="stopJob('${j.id}')">Stop</button>` : '';
     const who = showPerson && j.meta && j.meta.person ? ` <span class="pill">${esc(j.meta.person)}</span>` : '';
     return `<tr><td>${esc(j.title)}${who}<div class="muted">${esc(j.kind)} &middot; ${j.started}${j.ended ? ' &rarr; ' + j.ended : ''}${detail}</div>${progBar(p)}<div class="muted">${cnt}</div>${log}</td><td><span class="badge ${j.status}">${j.status}</span></td><td>${stop}</td></tr>`;
   }).join('')}</tbody></table>`;
@@ -54,9 +55,10 @@ function jobTable(jobs, showPerson = false) {
 /* ---------------------------------------------------------------- views -- */
 function renderHeader() {
   if (!S) return;
+  const rootName = S.root.split(/[\\/]/).filter(Boolean).pop() || S.root;
   $('#rootInfo').innerHTML = S.root_ok
-    ? `collection: <span title="${esc(S.root)}">${esc(S.root.split(/[\\/]/).pop())}</span> &middot; ${S.index.images_ok}/${S.index.total || '?'} indexed &middot; ${S.index.faces} faces`
-    : '<b style="color:#e88">collection drive not mounted</b>';
+    ? `collection: <span title="${esc(S.root)}">${esc(rootName)}</span> &middot; ${S.index.images_ok}/${S.index.total || '?'} indexed &middot; ${S.index.faces} faces`
+    : '<b style="color:#e88">collection folder not found</b>';
 }
 
 function renderDashboard() {
@@ -114,10 +116,10 @@ function renderDashboard() {
   <div class="card">
     <b>Settings</b>
     <div class="row" style="margin-top:8px">
-      <label style="flex:1">collection root <input type="text" id="rootInput" value="${esc(S.root)}" style="width:70%"></label>
+      <label style="flex:1">collection root <input type="text" id="rootInput" value="${esc(S.root)}" style="width:70%" placeholder="D:/Photos or //NAS/photos"></label>
       <button class="secondary" onclick="saveRoot()">Save</button>
     </div>
-    <div class="muted">e.g. the NTFS drive mounted read-only, folder "Foto".</div>
+    <div class="muted">Any folder with pictures: local disk, external drive, network share, or read-only mount. Originals are only read.</div>
     <div class="row" style="margin-top:10px;border-top:1px solid #262b34;padding-top:8px">
       <span class="muted">thumbnail cache: ${fmtMB((S.thumbs_cache || {}).bytes || 0)} / ${fmtMB((S.thumbs_cache || {}).max_bytes || 0)} &middot; ${(S.thumbs_cache || {}).files || 0} files</span>
       <span style="flex:1"></span>
@@ -268,11 +270,11 @@ function renderFaces() {
     <div class="row" style="margin-top:10px">
       <span class="muted"><b>${f.total.toLocaleString()}</b> photos &middot; ${f.faces.toLocaleString()} faces &middot; ${fmtMB(f.bytes)}</span>
       <span style="flex:1"></span>
-      <label>copy to folder <input type="text" id="fdest" value="${esc(f.dest)}" style="width:230px" onchange="ui.faces.dest=this.value" placeholder="found/people  or  /absolute/path"></label>
+      <label>copy to folder <input type="text" id="fdest" value="${esc(f.dest)}" style="width:230px" onchange="ui.faces.dest=this.value" placeholder="found/people  or  D:/Exports"></label>
       <button onclick="facesExport()" ${f.total ? '' : 'disabled'}>Copy ${f.total.toLocaleString()} photos</button>
       <a href="/api/faces/list.csv?${facesParams()}" target="_blank"><button class="secondary">CSV list</button></a>
     </div>
-    <div class="muted" style="margin-top:4px">Relative paths land in the project folder (e.g. <code>found/people</code>); absolute paths (e.g. <code>/home/you/Pictures/people</code>) are used as-is. Copies only, originals never moved. Big exports run as a job (Jobs tab).</div>
+    <div class="muted" style="margin-top:4px">Relative paths land in the project folder (e.g. <code>found/people</code>); absolute paths (e.g. <code>D:/Exports</code> or <code>/home/you/Pictures/people</code>) are used as-is. Copies only, originals never moved. Big exports run as a job (Jobs tab).</div>
     ${shotStatusRow()}
   </div>
   <div class="fgrid">${cards}</div>

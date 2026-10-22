@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -32,6 +31,7 @@ import numpy as np
 from photo_finder import db, review
 from photo_finder.imaging import IMAGE_EXT, load_image
 from photo_finder.models import FaceModels, MODEL_NAMES, aligned_crop
+from photo_finder.paths import expand_path
 from photo_finder.progress import Progress
 
 PROJECT = Path(__file__).resolve().parent
@@ -40,7 +40,7 @@ PROJECT = Path(__file__).resolve().parent
 def collect_refs(paths: list[str]) -> list[Path]:
     refs: list[Path] = []
     for p in paths:
-        p = Path(p)
+        p = expand_path(p)
         if p.is_dir():
             refs.extend(sorted(f for f in p.iterdir()
                                if f.is_file() and f.suffix.lower() in IMAGE_EXT))
@@ -97,7 +97,7 @@ def embed_reference(path: Path, fm, models: tuple[str, ...], max_side: int,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=str(PROJECT / "data" / "faces.db"))
-    ap.add_argument("--root", required=True, help="collection root (mounted read-only)")
+    ap.add_argument("--root", required=True, help="collection root (any folder; read-only recommended)")
     ap.add_argument("--refs", nargs="+", required=True, help="reference photo files or directories")
     ap.add_argument("--out", default=str(PROJECT / "review" / time.strftime("run-%Y%m%d-%H%M%S")))
     ap.add_argument("--progress-json", default="", help="write live progress JSON here (web UI)")
@@ -123,10 +123,13 @@ def main() -> int:
     ap.add_argument("--lvface", default=str(PROJECT / "models" / "lvface" / "LVFace-B_Glint360K.onnx"))
     args = ap.parse_args()
 
-    root = Path(os.path.abspath(args.root))
-    out_dir = Path(args.out).resolve()
+    root = expand_path(args.root).resolve()
+    out_dir = expand_path(args.out).resolve()
+    if not root.is_dir():
+        print(f"ERROR: collection root not found: {root}", file=sys.stderr)
+        return 1
 
-    conn = db.connect(Path(args.db), create=False)
+    conn = db.connect(expand_path(args.db), create=False)
     cfg = json.loads(db.meta_get(conn, "index_config") or "{}")
     det_sizes = tuple(cfg.get("det_sizes", [1280]))
     flip = cfg.get("flip", True) if args.flip is None else args.flip

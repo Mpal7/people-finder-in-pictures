@@ -49,7 +49,7 @@ def main() -> int:
     ap.add_argument("--out", default=os.path.join(here, "out"))
     args = ap.parse_args()
 
-    root = os.path.abspath(args.root)
+    root = os.path.abspath(os.path.expandvars(os.path.expanduser(args.root)))
     os.makedirs(args.out, exist_ok=True)
 
     rows = []

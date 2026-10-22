@@ -3,7 +3,7 @@
 
 Phase A (default): header-only pass - format, EXIF camera fields, original
 dimensions, exact screen resolutions, filenames, aspect ratios. Fast
-(~5 ms/image over the mount) and resumable (skips already-classified rows).
+(~5 ms/image over the collection) and resumable (skips already-classified rows).
 
 Phase B (--visual): re-score the "possible" group (class 1) with the
 status-bar/UI heuristics on small thumbnails; promotes to 2 or demotes to 0.
@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from photo_finder import db
+from photo_finder.paths import expand_path
 from photo_finder.progress import Progress
 from photo_finder.screenshots import VISUAL_T, VISUAL_T_LOW, classify_header, visual_score
 
@@ -37,8 +38,11 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
 
-    root = Path(args.root)
-    conn = db.connect(Path(args.db))
+    root = expand_path(args.root).resolve()
+    if not root.is_dir():
+        print(f"ERROR: collection root not found: {root}", file=sys.stderr)
+        return 1
+    conn = db.connect(expand_path(args.db))
     prog = Progress(args.progress_json)
 
     if args.visual and not args.redo:

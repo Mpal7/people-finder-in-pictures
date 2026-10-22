@@ -19,6 +19,7 @@ PROJECT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT))
 
 from photo_finder.jobs import pid_alive  # noqa: E402
+from photo_finder.paths import expand_path  # noqa: E402
 
 
 def fmt_h(seconds: float) -> str:
@@ -73,7 +74,7 @@ def main() -> int:
     ap.add_argument("--db", default=str(PROJECT / "data" / "faces.db"))
     ap.add_argument("--watch", type=int, default=0, help="refresh every N seconds")
     args = ap.parse_args()
-    db_path = Path(args.db)
+    db_path = expand_path(args.db)
     if not db_path.exists():
         print(f"no database at {db_path} (index not started yet)")
         return 1

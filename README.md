@@ -31,22 +31,42 @@ Originals are only ever read. Everything runs on your hardware.
 
 ## Requirements
 
-- **Linux** (the scripts, mount checks and job management target Linux).
-- Python **3.10–3.12**.
-- CPU-only works; a GPU helps but is not required.
+- **Windows 10/11 or Linux.** CI runs the tests on both.
+- Python **3.10–3.12**, 64-bit.
+- CPU-only works; a GPU is optional.
 - Roughly 1–3 GB for the index of 20k images, plus space for exported copies.
-- A photo drive you can mount **read-only** (recommended).
+- **Any folder containing pictures** — local disk, external/removable drive,
+  NAS/network share, or a read-only mount. The path is chosen at runtime; there
+  is no hardcoded drive letter or `/mnt` location.
 
 ## Install
+
+**Windows (PowerShell):**
+
+```powershell
+git clone <this-repo> people-finder
+cd people-finder
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+`setup.ps1` creates `.venv`, installs `requirements.txt`, and downloads the
+model weights once (~1 GB). Afterwards the tool runs fully offline.
+
+Manual equivalent:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe recon\setup_models.py
+```
+
+**Linux:**
 
 ```bash
 git clone <this-repo> people-finder
 cd people-finder
 ./setup.sh
 ```
-
-`setup.sh` creates `.venv`, installs `requirements.txt`, and downloads the model
-weights once (~1 GB). Afterwards the tool runs fully offline.
 
 Manual equivalent:
 
@@ -56,33 +76,40 @@ python3 -m venv .venv
 .venv/bin/python recon/setup_models.py
 ```
 
-If `insightface` fails to build, install the build toolchain first (Debian/
-Ubuntu: `sudo apt install build-essential python3-dev`) and retry.
+If pip tries to build a dependency from source on Windows, install the
+Microsoft C++ Build Tools and retry. The pinned InsightFace 1.x wheel does not
+need a compiler. On Debian/Ubuntu use `sudo apt install build-essential
+python3-dev` instead.
 
 > **Model licenses:** the code is MIT (`LICENSE`), but the pretrained weights are
 > non-commercial research assets. See [NOTICE.md](NOTICE.md) before commercial use.
 
 ## Run
 
-Mount the collection read-only first:
+**Windows:**
 
-```bash
-findmnt -no TARGET,OPTIONS /path/to/mount
-sudo mount -o remount,ro /path/to/mount   # only if it is mounted read-write
+```powershell
+.\run_app.ps1               # http://127.0.0.1:8770
+.\run_app.ps1 --port 9000   # if 8770 is taken
 ```
 
-Then start the app:
+**Linux:**
 
 ```bash
 ./run_app.sh               # http://127.0.0.1:8770
 ./run_app.sh --port 9000   # if 8770 is taken
 ```
 
-On first start, set the **collection root** in **Dashboard → Settings**. The UI
-has four tabs: **Dashboard**, **People**, **Faces**, **Jobs**.
+On first start, set the **collection root** in **Dashboard → Settings** to any
+absolute path, for example `D:\Photos`, `\\NAS\photos`, `/mnt/foto`, or
+`~/Pictures`. Windows drive letters, UNC shares, spaces and Unicode paths all
+work. If you move the collection, update the setting; the index stores paths
+relative to that root, so the same folder structure keeps working.
 
-The server binds to `127.0.0.1` by default. Keep it there: the API is
-unauthenticated and can read your collection.
+There is no mount requirement. A read-only mount is still the safest choice for
+an archive, but People Finder only ever reads originals. The server binds to
+`127.0.0.1` by default. Keep it there: the API is unauthenticated and can read
+your collection.
 
 ## 1. Dashboard — build the index
 
@@ -176,16 +203,33 @@ resumes or continues.
 | `export_matches.py` | copy selected matches (`found/<person>/`, sha256 manifest) |
 | `detect_screenshots.py` | screenshot classification for indexed images |
 | `index_status.py` | index status, also while the UI runs |
+| `resume_index.py` | resume indexing from any folder, detached (Windows/Linux) |
 | `webapp.py` | local UI (FastAPI, 127.0.0.1 only) |
 
+Use `.venv\Scripts\python.exe` on Windows or `.venv/bin/python` on Linux below.
+
+```powershell
+# Windows
+.\.venv\Scripts\python.exe index_faces.py "D:\Photos" --models w600k --det-sizes 1280
+.\.venv\Scripts\python.exe pick_reference_faces.py --src people\alice\refs_src
+.\.venv\Scripts\python.exe pick_reference_faces.py --apply people\alice\refs_pick\selection.json `
+    --src people\alice\refs_src --dest people\alice\refs
+.\.venv\Scripts\python.exe match_person.py --root "D:\Photos" --refs people\alice\refs `
+    --neg-refs people\alice\refs_neg --out review\alice --top-faces 600
+.\.venv\Scripts\python.exe export_matches.py --root "D:\Photos" `
+    --selection review\alice\selection.json --dest found\alice --flat
+.\.venv\Scripts\python.exe index_status.py --watch 60
+```
+
 ```bash
-.venv/bin/python index_faces.py /mnt/foto/Foto --models w600k --det-sizes 1280
+# Linux
+.venv/bin/python index_faces.py "/mnt/foto/Foto" --models w600k --det-sizes 1280
 .venv/bin/python pick_reference_faces.py --src people/alice/refs_src
 .venv/bin/python pick_reference_faces.py --apply people/alice/refs_pick/selection.json \
     --src people/alice/refs_src --dest people/alice/refs
-.venv/bin/python match_person.py --root /mnt/foto/Foto --refs people/alice/refs \
+.venv/bin/python match_person.py --root "/mnt/foto/Foto" --refs people/alice/refs \
     --neg-refs people/alice/refs_neg --out review/alice --top-faces 600
-.venv/bin/python export_matches.py --root /mnt/foto/Foto \
+.venv/bin/python export_matches.py --root "/mnt/foto/Foto" \
     --selection review/alice/selection.json --dest found/alice --flat
 .venv/bin/python index_status.py --watch 60
 ```
@@ -198,8 +242,10 @@ Useful options:
 - `match_person.py --neg-refs DIR` / `--neg-weight` control look-alike
   suppression; `--fusion`, `--weights` and `--min-z` tune ranking;
   `--near-dup-threshold` (or `--no-near-dup`) controls review grouping.
-- `resume_index.sh` relaunches the indexer after a reboot:
-  `PHOTO_MOUNT=/mnt/foto PHOTO_ROOT=/mnt/foto/Foto ./resume_index.sh`.
+- `resume_index.py` relaunches the indexer after a reboot and works on both
+  platforms: `.\resume_index.ps1 --root "D:\Photos"` or
+  `./resume_index.sh --root /mnt/foto/Foto`. The worker is detached and appears
+  in the Jobs tab.
 
 ## Layout
 
@@ -231,9 +277,16 @@ Runtime data, models and exports are git-ignored.
 
 ## Troubleshooting
 
-- **Drive not mounted** — set the root in **Dashboard → Settings** and check the
-  path exists.
-- **Model not found** — run `recon/setup_models.py` (or `./setup.sh` again).
+- **Collection folder not found** — update the path in **Dashboard → Settings**
+  (a drive letter can change when a removable disk is reconnected; a network
+  share must be online). There is no mount step and no fixed drive.
+- **Model not found** — run `recon/setup_models.py`, or rerun `.\setup.ps1` /
+  `./setup.sh`.
+- **PowerShell blocks the scripts** — run them with
+  `powershell -ExecutionPolicy Bypass -File .\run_app.ps1` (same for setup).
+- **Python launcher missing** — install Python 3.10–3.12 from python.org and
+  enable the `py` launcher; avoid the Microsoft Store stub if pip cannot find
+  your venv.
 - **No face in a reference photo** — use a clearer or larger crop; if the face
   fills the frame, use the picker so its landmark sidecar is written.
 - **A photo is missed** — turned-away, tiny or obscured faces are hard for every
@@ -242,16 +295,22 @@ Runtime data, models and exports are git-ignored.
   TTA or max-side; those settings are part of the per-image config key.
 - **Near-duplicates not grouped** — raise `--near-dup-threshold` on the CLI, or
   turn grouping off to compare cards individually.
+- **A Windows path is very long** — enable Win32 long paths or move the
+  collection closer to the drive root; Windows still limits some operations.
 
 ## Tests
 
-```bash
-python -m unittest discover -s tests -v
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The suite covers dates, perceptual grouping, thumbnail cache, review generation
-and picker collisions, and runs without models or FastAPI. CI runs it on Python
-3.10–3.12.
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+The suite covers dates, cross-platform path safety, perceptual grouping,
+thumbnail cache, review generation and picker collisions, and runs without
+models or FastAPI. CI runs Python 3.10–3.12 on Linux and 3.12 on Windows.
 
 ## License
 

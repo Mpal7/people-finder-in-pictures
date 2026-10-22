@@ -18,6 +18,8 @@ from PIL import Image
 from pick_reference_faces import stage_apply
 from photo_finder import review
 from photo_finder.imaging import image_date, load_dup_map
+from photo_finder.jobs import JobManager, pid_alive
+from photo_finder.paths import is_within, rel_parts, safe_join
 from photo_finder.similarity import dhash, hamming, near_duplicate_groups
 from photo_finder.thumbs import ThumbCache
 
@@ -28,6 +30,59 @@ def _pattern(seed: int = 0, size: int = 96) -> np.ndarray:
     small = rng.integers(0, 255, size=(12, 12, 3), dtype=np.uint8)
     img = Image.fromarray(small).resize((size, size), Image.BILINEAR)
     return np.asarray(img)
+
+
+class PathTests(unittest.TestCase):
+    def test_relative_paths_accept_both_separators(self):
+        self.assertEqual(rel_parts(r"2024\July\a.jpg"), ("2024", "July", "a.jpg"))
+        self.assertEqual(rel_parts("2024/July/a.jpg"), ("2024", "July", "a.jpg"))
+        self.assertEqual(rel_parts("./2024//a.jpg"), ("2024", "a.jpg"))
+
+    def test_absolute_and_traversal_paths_are_rejected(self):
+        for bad in ("/etc/passwd", r"\Windows\a.jpg", r"C:\Photos\a.jpg",
+                    "C:relative.jpg", r"2024\C:relative.jpg",
+                    r"\\server\share\a.jpg", "../a.jpg",
+                    r"2024\..\..\a.jpg", ""):
+            with self.subTest(path=bad):
+                with self.assertRaises(ValueError):
+                    rel_parts(bad)
+
+    def test_safe_join_stays_under_root(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertEqual(safe_join(root, r"2024\a.jpg"), root / "2024" / "a.jpg")
+            with self.assertRaises(ValueError):
+                safe_join(root, r"\outside.jpg")
+
+    def test_is_within(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertTrue(is_within(root / "a" / "b.jpg", root))
+            self.assertTrue(is_within(root, root))
+            self.assertFalse(is_within(root.parent, root))
+
+    def test_current_process_is_alive(self):
+        self.assertTrue(pid_alive(os.getpid()))
+
+
+class JobManagerTests(unittest.TestCase):
+    def test_stopping_job_becomes_stopped(self):
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            data.mkdir(exist_ok=True)
+            (data / "jobs").mkdir(exist_ok=True)
+            job = {
+                "id": "20260101-000000-index", "kind": "index", "title": "test",
+                "cmd": [], "pid": 99_999_999, "started": "2026-01-01 00:00:00",
+                "ended": None, "status": "stopping",
+                "log": str(data / "jobs" / "missing.log"),
+                "progress": str(data / "jobs" / "missing.progress.json"),
+                "meta": {},
+            }
+            (data / "jobs.json").write_text(json.dumps([job]), encoding="utf-8")
+            manager = JobManager(data)
+            self.assertEqual(manager.jobs[0]["status"], "stopped")
+            self.assertTrue(manager.jobs[0]["ended"])
 
 
 class SimilarityTests(unittest.TestCase):

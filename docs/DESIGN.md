@@ -22,6 +22,11 @@ copy the confirmed matches into a separate folder for review.
 ## 2. Stack
 
 - Python 3.10-3.12, SQLite, FastAPI + a vanilla-JS UI.
+- Windows 10/11 and Linux are supported. Background workers detach with
+  `DETACHED_PROCESS` on Windows and `start_new_session` on POSIX; path helpers
+  accept both `\` and `/`.
+- The collection root is a runtime setting, not a mount assumption. Local,
+  removable, network and read-only paths all use the same relative-path index.
 - Face detection: SCRFD-10G from the InsightFace `buffalo_l` pack, at 1280 px
   input by default (optionally merging 640 + 1280 detections).
 - Recognition: aligned 112×112 ArcFace crops embedded by up to three models:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """People Finder - local web UI (127.0.0.1 only, fully offline).
 
-Run:  .venv/bin/python webapp.py            (http://127.0.0.1:8770)
-      .venv/bin/python webapp.py --port 9000
+Run:  .venv/bin/python webapp.py            (Linux/macOS)
+      .venv\\Scripts\\python.exe webapp.py  (Windows)
 
 The UI orchestrates the same resumable CLI tools used from the terminal:
   index_faces.py          - build / extend the shared face index
@@ -31,6 +31,7 @@ from photo_finder import db as fdb  # noqa: E402
 from photo_finder import people as ppl  # noqa: E402
 from photo_finder.imaging import IMAGE_EXT  # noqa: E402
 from photo_finder.jobs import JobManager  # noqa: E402
+from photo_finder.paths import expand_path, is_within, safe_join  # noqa: E402
 from photo_finder.thumbs import ThumbCache  # noqa: E402
 
 DATA = PROJECT / "data"
@@ -62,6 +63,20 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     (DATA / "config.json").write_text(json.dumps(cfg, indent=1), encoding="utf-8")
+
+
+def config_root() -> Path | None:
+    """Resolve the configured collection root for any local/removable/share path."""
+    raw = str(load_config().get("root") or "").strip()
+    if not raw:
+        return None
+    root = expand_path(raw)
+    if not root.is_absolute():
+        root = PROJECT / root
+    try:
+        return root.resolve()
+    except OSError:
+        return root
 
 
 # ------------------------------------------------------------------- app ---
@@ -212,14 +227,14 @@ class ResetReq(BaseModel):
 @app.get("/api/state")
 def api_state():
     cfg = load_config()
-    root = Path(cfg["root"]) if cfg.get("root") else None
+    root = config_root()
     st = index_stats()
     total_faces = max(st["faces"], 1)
     coverage = {m: {"count": st["models"].get(m, 0),
                     "pct": round(100 * st["models"].get(m, 0) / total_faces, 1)}
                 for m in MODEL_ORDER}
     return {
-        "root": cfg.get("root", ""),
+        "root": cfg.get("root") or "",
         "root_ok": bool(root and root.is_dir()),
         "index": index_status(),
         "coverage": coverage,
@@ -234,21 +249,30 @@ def api_state():
 
 @app.post("/api/config")
 def api_config(body: Config):
-    save_config({"root": body.root})
-    return {"ok": True, "root": body.root}
+    raw = body.root.strip()
+    if raw:
+        root = expand_path(raw)
+        if not root.is_absolute():
+            root = PROJECT / root
+        try:
+            raw = str(root.resolve())
+        except OSError:
+            raw = str(root)
+    save_config({"root": raw})
+    return {"ok": True, "root": raw, "root_ok": bool(raw and Path(raw).is_dir())}
 
 
 @app.post("/api/index/start")
 def api_index_start(body: IndexReq):
     if jm.active("index"):
         raise HTTPException(409, "an index run is already active")
-    cfg = load_config()
-    if not cfg.get("root") or not Path(cfg["root"]).is_dir():
-        raise HTTPException(400, "collection root not set / not mounted - set it in Settings")
+    root = config_root()
+    if not root or not root.is_dir():
+        raise HTTPException(400, "collection root not set or not found - set it in Settings")
     models = [m for m in body.models if m in MODEL_ORDER]
     if not models:
         raise HTTPException(400, "no models selected")
-    cmd = [PY, str(PROJECT / "index_faces.py"), cfg["root"], "--db", str(DB_PATH),
+    cmd = [PY, str(PROJECT / "index_faces.py"), str(root), "--db", str(DB_PATH),
            "--models", ",".join(models), "--det-sizes", body.det_sizes,
            "--progress-json", "{progress}"]
     if not body.flip:
@@ -332,7 +356,7 @@ def api_refs_scan(slug: str, body: ScanReq):
     if jm.active() and jm.active()["kind"] in ("scan",):
         raise HTTPException(409, "a reference scan is already active")
     d = ppl.person_dir(slug)
-    src = Path(body.src) if body.src else d / "refs_src"
+    src = expand_path(body.src) if body.src else d / "refs_src"
     if not src.is_dir():
         raise HTTPException(400, f"folder not found: {src}")
     images = [p for p in src.iterdir()
@@ -388,9 +412,9 @@ def api_match(slug: str, body: MatchReq):
         raise HTTPException(400, "fusion must be 'mean' or 'max'")
     if body.neg_weight < 0:
         raise HTTPException(400, "neg_weight must be >= 0")
-    cfg = load_config()
-    if not cfg.get("root") or not Path(cfg["root"]).is_dir():
-        raise HTTPException(400, "collection root not set / not mounted")
+    root = config_root()
+    if not root or not root.is_dir():
+        raise HTTPException(400, "collection root not set or not found")
     refs = ppl.refs_dir(person)
     if not refs.is_dir() or not any(refs.glob("*.jpg")):
         raise HTTPException(400, "no reference crops yet - run the picker/apply first")
@@ -404,7 +428,7 @@ def api_match(slug: str, body: MatchReq):
         run_dir = ppl.person_dir(slug) / "runs" / ts
         suffix += 1
     review_dir = run_dir / "review"
-    cmd = [PY, str(PROJECT / "match_person.py"), "--db", str(DB_PATH), "--root", cfg["root"],
+    cmd = [PY, str(PROJECT / "match_person.py"), "--db", str(DB_PATH), "--root", str(root),
            "--refs", str(refs), "--out", str(review_dir), "--top-faces", str(body.top_faces),
            "--fusion", body.fusion, "--neg-weight", str(body.neg_weight),
            "--progress-json", "{progress}",
@@ -455,15 +479,15 @@ def api_export(slug: str, body: ExportReq):
     active = jm.active("export")
     if active and active.get("meta", {}).get("person") == slug:
         raise HTTPException(409, "a copy job for this person is already active")
-    cfg = load_config()
-    if not cfg.get("root") or not Path(cfg["root"]).is_dir():
-        raise HTTPException(400, "collection root not set / not mounted")
+    root = config_root()
+    if not root or not root.is_dir():
+        raise HTTPException(400, "collection root not set or not found")
     run_dir = ppl.person_dir(slug) / "runs" / body.ts
     sel = run_dir / "selection.json"
     if not sel.exists():
         raise HTTPException(400, "no selection saved for this run yet")
     dest = FOUND / slug
-    cmd = [PY, str(PROJECT / "export_matches.py"), "--root", cfg["root"],
+    cmd = [PY, str(PROJECT / "export_matches.py"), "--root", str(root),
            "--selection", str(sel), "--dest", str(dest), "--flat",
            "--progress-json", "{progress}"]
     job = jm.start("export", cmd, f"Copy selection for '{person['name']}'",
@@ -552,11 +576,13 @@ def _filters(min_faces, min_det, min_face_pct, folder, sort, shots="all",
 
 
 def _safe_rel(path: str) -> Path:
-    rel = Path(path)
-    if rel.is_absolute() or ".." in rel.parts:
+    root = config_root()
+    if not root:
+        raise HTTPException(400, "collection root not set")
+    try:
+        full = safe_join(root, path)
+    except ValueError:
         raise HTTPException(400, "bad path")
-    cfg = load_config()
-    full = Path(cfg["root"]) / rel
     if not full.is_file():
         raise HTTPException(404, "not found")
     return full
@@ -602,10 +628,10 @@ class ShotsReq(BaseModel):
 def api_shots_analyze(body: ShotsReq):
     if jm.active("shots"):
         raise HTTPException(409, "a screenshot analysis is already running")
-    cfg = load_config()
-    if not cfg.get("root") or not Path(cfg["root"]).is_dir():
-        raise HTTPException(400, "collection root not set / not mounted")
-    cmd = [PY, str(PROJECT / "detect_screenshots.py"), cfg["root"], "--db", str(DB_PATH),
+    root = config_root()
+    if not root or not root.is_dir():
+        raise HTTPException(400, "collection root not set or not found")
+    cmd = [PY, str(PROJECT / "detect_screenshots.py"), str(root), "--db", str(DB_PATH),
            "--progress-json", "{progress}"]
     if body.visual:
         cmd.append("--visual")
@@ -647,16 +673,17 @@ def api_faces_csv(min_faces: int = 1, min_det: float = 0.5, min_face_pct: float 
 
 @app.post("/api/faces/export")
 def api_faces_export(body: FacesExportReq):
-    cfg = load_config()
+    root_path = config_root()
+    if not root_path or not root_path.is_dir():
+        raise HTTPException(400, "collection root not set or not found")
     raw = (body.dest or "").strip()
     if not raw:
         raise HTTPException(400, "destination folder required")
-    dest_path = Path(raw).expanduser()
+    dest_path = expand_path(raw)
     if not dest_path.is_absolute():
         dest_path = PROJECT / dest_path
     dest_path = dest_path.resolve()
-    root_path = Path(cfg["root"]).resolve() if cfg.get("root") else None
-    if root_path and (dest_path == root_path or root_path in dest_path.parents):
+    if root_path and (is_within(dest_path, root_path) or is_within(root_path, dest_path)):
         raise HTTPException(400, "destination must be OUTSIDE the collection (originals stay read-only)")
     if dest_path.exists() and not dest_path.is_dir():
         raise HTTPException(400, "destination exists and is not a directory")
@@ -672,7 +699,7 @@ def api_faces_export(body: FacesExportReq):
         "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
         "selection": [{"path": r["p"], "score": r["nf"]} for r in rows],
     }, indent=1), encoding="utf-8")
-    cmd = [PY, str(PROJECT / "export_matches.py"), "--root", cfg["root"],
+    cmd = [PY, str(PROJECT / "export_matches.py"), "--root", str(root_path),
            "--selection", str(sel), "--dest", str(dest_path), "--flat",
            "--progress-json", "{progress}"]
     job = jm.start("export", cmd, f"Copy {total} photos to {dest_path}",
@@ -695,11 +722,11 @@ FILE_ROOTS = tuple(p.resolve() for p in (ppl.PEOPLE_DIR, RUNS_ROOT))
 
 @app.get("/files/{path:path}")
 def files(path: str):
-    rel = Path(path)
-    if rel.is_absolute() or ".." in rel.parts:
+    try:
+        full = safe_join(PROJECT, path).resolve()
+    except ValueError:
         raise HTTPException(404, "not found")
-    full = (PROJECT / rel).resolve()
-    if not any(full == root or root in full.parents for root in FILE_ROOTS):
+    if not any(is_within(full, root) for root in FILE_ROOTS):
         raise HTTPException(404, "not found")
     if not full.is_file():
         raise HTTPException(404, "not found")
