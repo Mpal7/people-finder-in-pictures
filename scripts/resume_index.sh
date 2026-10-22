@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Linux convenience wrapper around resume_index.py. The collection path is
-# never hardcoded: pass --root, or set PHOTO_ROOT.
+# Linux convenience wrapper around `python -m cli.resume_index`. The collection
+# path is never hardcoded: pass --root, or set PHOTO_ROOT.
 #
-#   PHOTO_ROOT=/mnt/foto/Foto ./resume_index.sh
-#   ./resume_index.sh --root /mnt/foto/Foto --check
+#   PHOTO_ROOT=/mnt/foto/Foto ./scripts/resume_index.sh
+#   ./scripts/resume_index.sh --root /mnt/foto/Foto --check
 #
 # Optional legacy helpers:
 #   PHOTO_MOUNT        used as "$PHOTO_MOUNT/Foto" when PHOTO_ROOT is unset
 #   PHOTO_DRIVE_LABEL  if set and the root is missing, try udisksctl mount
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 if [[ -z "${PHOTO_ROOT:-}" && -n "${PHOTO_MOUNT:-}" ]]; then
   export PHOTO_ROOT="$PHOTO_MOUNT/Foto"
@@ -35,4 +35,4 @@ if [[ -n "${PHOTO_ROOT:-}" ]] && command -v findmnt >/dev/null 2>&1; then
   fi
 fi
 
-exec .venv/bin/python resume_index.py "$@"
+exec .venv/bin/python -m cli.resume_index "$@"

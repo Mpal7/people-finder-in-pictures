@@ -5,8 +5,8 @@ The collection root is an ordinary path: a local disk, an external/removable
 drive, a NAS/network share, or a read-only mount. It is never hardcoded.
 
 Examples:
-  .venv\\Scripts\\python.exe resume_index.py --root "D:/Photos"
-  .venv/bin/python resume_index.py --root "/mnt/foto"
+  .venv\\Scripts\\python.exe -m cli.resume_index --root "D:/Photos"
+  .venv/bin/python -m cli.resume_index --root "/mnt/foto"
 
 The worker is the same resumable CLI used by the web UI. It is registered in
 ``data/jobs.json``, so progress and logs also appear in the Jobs tab.
@@ -18,7 +18,7 @@ import os
 import sys
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 
 from photo_finder.jobs import JobManager  # noqa: E402
@@ -47,8 +47,8 @@ def main() -> int:
 
     if not args.root:
         print("ERROR: --root is required (or set PHOTO_ROOT), e.g.\n"
-              '  resume_index.py --root "D:/Photos"\n'
-              '  resume_index.py --root "/mnt/foto"', file=sys.stderr)
+              '  python -m cli.resume_index --root "D:/Photos"\n'
+              '  python -m cli.resume_index --root "/mnt/foto"', file=sys.stderr)
         return 1
     root = expand_path(args.root).resolve()
     if not root.is_dir():
@@ -66,7 +66,7 @@ def main() -> int:
         return 0
 
     db_path = expand_path(args.db).resolve()
-    cmd = [sys.executable, str(PROJECT / "index_faces.py"), str(root),
+    cmd = [sys.executable, "-m", "cli.index_faces", str(root),
            "--db", str(db_path), "--models", args.models,
            "--det-sizes", args.det_sizes, "--max-side", str(args.max_side),
            "--threads", str(args.threads), "--progress-json", "{progress}"]
@@ -85,7 +85,7 @@ def main() -> int:
                    meta={"root": str(root)})
     print(f"started {job['id']} (pid {job['pid']})")
     print(f"log: {job['log']}")
-    print(f"progress: {sys.executable} index_status.py")
+    print(f"progress: {sys.executable} -m cli.index_status")
     return 0
 
 

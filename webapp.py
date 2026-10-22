@@ -4,11 +4,11 @@
 Run:  .venv/bin/python webapp.py            (Linux/macOS)
       .venv\\Scripts\\python.exe webapp.py  (Windows)
 
-The UI orchestrates the same resumable CLI tools used from the terminal:
-  index_faces.py          - build / extend the shared face index
-  pick_reference_faces.py - scan a person's reference photos, pick the right face
-  match_person.py         - match a person's refs against the index
-  export_matches.py       - copy the selected matches to found/<person>/
+The UI orchestrates the same resumable CLI modules used from the terminal:
+  cli.index_faces          - build / extend the shared face index
+  cli.pick_reference_faces - scan a person's reference photos, pick the right face
+  cli.match_person         - match a person's refs against the index
+  cli.export_matches       - copy the selected matches to found/<person>/
 
 Nothing leaves the machine; the collection is opened read-only.
 """
@@ -272,7 +272,7 @@ def api_index_start(body: IndexReq):
     models = [m for m in body.models if m in MODEL_ORDER]
     if not models:
         raise HTTPException(400, "no models selected")
-    cmd = [PY, str(PROJECT / "index_faces.py"), str(root), "--db", str(DB_PATH),
+    cmd = [PY, "-m", "cli.index_faces", str(root), "--db", str(DB_PATH),
            "--models", ",".join(models), "--det-sizes", body.det_sizes,
            "--progress-json", "{progress}"]
     if not body.flip:
@@ -363,7 +363,7 @@ def api_refs_scan(slug: str, body: ScanReq):
               if p.is_file() and p.suffix.lower() in IMAGE_EXT]
     if not images:
         raise HTTPException(400, f"no images in {src} - drop reference photos there first")
-    cmd = [PY, str(PROJECT / "pick_reference_faces.py"), "--src", str(src),
+    cmd = [PY, "-m", "cli.pick_reference_faces", "--src", str(src),
            "--out", str(d / "refs_pick"), "--progress-json", "{progress}",
            "--api-pick", f"/api/people/{slug}/refs/pick"]
     job = jm.start("scan", cmd, f"Scan references ({len(images)} photos)", meta={"person": slug})
@@ -395,7 +395,7 @@ def api_refs_apply(slug: str):
     src = d / "refs_src"
     if not src.is_dir():
         raise HTTPException(400, f"references folder missing: {src}")
-    cmd = [PY, str(PROJECT / "pick_reference_faces.py"), "--apply", str(sel),
+    cmd = [PY, "-m", "cli.pick_reference_faces", "--apply", str(sel),
            "--src", str(src), "--dest", str(ppl.refs_dir(person)), "--progress-json", "{progress}"]
     job = jm.start("apply", cmd, "Apply reference picks (crops + landmarks)", meta={"person": slug})
     return {"ok": True, "job": job["id"]}
@@ -428,7 +428,7 @@ def api_match(slug: str, body: MatchReq):
         run_dir = ppl.person_dir(slug) / "runs" / ts
         suffix += 1
     review_dir = run_dir / "review"
-    cmd = [PY, str(PROJECT / "match_person.py"), "--db", str(DB_PATH), "--root", str(root),
+    cmd = [PY, "-m", "cli.match_person", "--db", str(DB_PATH), "--root", str(root),
            "--refs", str(refs), "--out", str(review_dir), "--top-faces", str(body.top_faces),
            "--fusion", body.fusion, "--neg-weight", str(body.neg_weight),
            "--progress-json", "{progress}",
@@ -487,7 +487,7 @@ def api_export(slug: str, body: ExportReq):
     if not sel.exists():
         raise HTTPException(400, "no selection saved for this run yet")
     dest = FOUND / slug
-    cmd = [PY, str(PROJECT / "export_matches.py"), "--root", str(root),
+    cmd = [PY, "-m", "cli.export_matches", "--root", str(root),
            "--selection", str(sel), "--dest", str(dest), "--flat",
            "--progress-json", "{progress}"]
     job = jm.start("export", cmd, f"Copy selection for '{person['name']}'",
@@ -631,7 +631,7 @@ def api_shots_analyze(body: ShotsReq):
     root = config_root()
     if not root or not root.is_dir():
         raise HTTPException(400, "collection root not set or not found")
-    cmd = [PY, str(PROJECT / "detect_screenshots.py"), str(root), "--db", str(DB_PATH),
+    cmd = [PY, "-m", "cli.detect_screenshots", str(root), "--db", str(DB_PATH),
            "--progress-json", "{progress}"]
     if body.visual:
         cmd.append("--visual")
@@ -699,7 +699,7 @@ def api_faces_export(body: FacesExportReq):
         "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
         "selection": [{"path": r["p"], "score": r["nf"]} for r in rows],
     }, indent=1), encoding="utf-8")
-    cmd = [PY, str(PROJECT / "export_matches.py"), "--root", str(root_path),
+    cmd = [PY, "-m", "cli.export_matches", "--root", str(root_path),
            "--selection", str(sel), "--dest", str(dest_path), "--flat",
            "--progress-json", "{progress}"]
     job = jm.start("export", cmd, f"Copy {total} photos to {dest_path}",

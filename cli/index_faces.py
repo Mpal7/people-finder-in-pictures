@@ -8,11 +8,11 @@ detection config and models are skipped; adding a model later only computes
 the missing embeddings for existing faces.
 
 Usage (smoke test):
-  .venv/bin/python index_faces.py "<root>" --db data/faces.db \
+  .venv/bin/python -m cli.index_faces "<root>" --db data/faces.db \
       --dedup recon/out/duplicates.csv --models w600k --limit 30
 
 Overnight quality-first run (recommended staging):
-  .venv/bin/python index_faces.py "<root>" --models w600k
+  .venv/bin/python -m cli.index_faces "<root>" --models w600k
   # next nights: rerun with --models w600k,adaface and then ...,lvface
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ from photo_finder.models import FaceModels, aligned_crop
 from photo_finder.paths import expand_path, is_within
 from photo_finder.progress import Progress
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = PROJECT / "data" / "faces.db"
 
 

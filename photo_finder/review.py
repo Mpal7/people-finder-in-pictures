@@ -7,7 +7,7 @@ Generates a self-contained local page (no server, no external resources):
   <out>/crops/*.jpg  - face crops (with margin)
   <out>/thumbs/*.jpg - image thumbnails
 
-Selection is exported client-side as JSON (download); export_matches.py reads it.
+Selection is exported client-side as JSON (download); cli.export_matches reads it.
 Near-identical photos (WhatsApp re-encodes, HEIC/JPG pairs) are grouped by
 perceptual hash so the grid shows one representative plus an expandable
 "similar" set.

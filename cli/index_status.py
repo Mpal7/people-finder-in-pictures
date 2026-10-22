@@ -2,9 +2,9 @@
 """One-command status of the face index (safe to run while indexing is active).
 
 Examples:
-  .venv/bin/python index_status.py                 # current index progress
-  .venv/bin/python index_status.py --watch 60      # refresh every 60 s
-  .venv/bin/python index_status.py --db data/faces.db
+  .venv/bin/python -m cli.index_status                 # current index progress
+  .venv/bin/python -m cli.index_status --watch 60      # refresh every 60 s
+  .venv/bin/python -m cli.index_status --db data/faces.db
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 
 from photo_finder.jobs import pid_alive  # noqa: E402

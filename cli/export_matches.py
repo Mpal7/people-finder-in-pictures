@@ -6,7 +6,7 @@ structure preserved under --dest; a CSV manifest records size and sha256 of
 every copy. Nothing is moved, renamed or modified at the source.
 
 Usage:
-  .venv/bin/python export_matches.py --root "<root>" \
+  .venv/bin/python -m cli.export_matches --root "<root>" \
       --selection review/run1/selection.json --dest found/run1
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 from photo_finder.paths import expand_path, is_within, rel_parts
 from photo_finder.progress import Progress
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parents[1]
 
 
 def sha256_file(path: Path) -> str:

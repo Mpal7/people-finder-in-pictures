@@ -9,7 +9,7 @@ Phase B (--visual): re-score the "possible" group (class 1) with the
 status-bar/UI heuristics on small thumbnails; promotes to 2 or demotes to 0.
 
 Usage:
-  .venv/bin/python detect_screenshots.py "<root>" [--visual] [--redo] [--progress-json PATH]
+  .venv/bin/python -m cli.detect_screenshots "<root>" [--visual] [--redo] [--progress-json PATH]
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from photo_finder.paths import expand_path
 from photo_finder.progress import Progress
 from photo_finder.screenshots import VISUAL_T, VISUAL_T_LOW, classify_header, visual_score
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = PROJECT / "data" / "faces.db"
 
 

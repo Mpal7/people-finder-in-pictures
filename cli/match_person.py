@@ -14,7 +14,7 @@ Outputs (in --out):
   scores_all.csv        every face with per-model scores (Phase 2 calibration)
 
 Usage:
-  .venv/bin/python match_person.py --db data/faces.db --root "<root>" \
+  .venv/bin/python -m cli.match_person --db data/faces.db --root "<root>" \
       --refs people/alice/refs --out review/run1 --top-faces 600
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ from photo_finder.models import FaceModels, MODEL_NAMES, aligned_crop
 from photo_finder.paths import expand_path
 from photo_finder.progress import Progress
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parents[1]
 
 
 def collect_refs(paths: list[str]) -> list[Path]:
@@ -66,7 +66,7 @@ def embed_reference(path: Path, fm, models: tuple[str, ...], max_side: int,
                     label: str) -> dict[str, np.ndarray] | None:
     """Embed one reference photo (positive or negative).
 
-    Prefers the landmark sidecar written by pick_reference_faces.py; otherwise
+    Prefers the landmark sidecar written by cli.pick_reference_faces; otherwise
     detects faces and uses the one closest to the center of the frame.
     """
     arr = load_image(path, max_side)
@@ -145,7 +145,7 @@ def main() -> int:
     else:
         models = tuple(m for m in MODEL_NAMES if m in db_models)
     if not models:
-        print("ERROR: no embeddings in DB; run index_faces.py first", file=sys.stderr)
+        print("ERROR: no embeddings in DB; run cli.index_faces first", file=sys.stderr)
         return 1
     weights = {m: 1.0 for m in models}
     if args.weights:

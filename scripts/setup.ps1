@@ -1,12 +1,13 @@
 # One-time Windows setup: virtualenv + Python dependencies + model weights.
 # Run from the repo root:
-#   powershell -ExecutionPolicy Bypass -File .\setup.ps1
+#   powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 param(
     [switch]$NoModels
 )
 
 $ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot
+$Repo = Split-Path $PSScriptRoot -Parent
+Set-Location $Repo
 
 $Candidates = @()
 if ($env:PYTHON) {
@@ -46,7 +47,7 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
     if ($LASTEXITCODE -ne 0) { throw "could not create .venv" }
 }
 
-$VenvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+$VenvPython = Join-Path $Repo ".venv\Scripts\python.exe"
 & $VenvPython -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 & $VenvPython -m pip install -r requirements.txt
@@ -61,4 +62,4 @@ if (-not $NoModels) {
 
 Write-Host ""
 Write-Host "Setup complete. Start the UI with:"
-Write-Host "  .\run_app.ps1"
+Write-Host "  .\scripts\run_app.ps1"

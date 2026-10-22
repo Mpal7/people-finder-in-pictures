@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # One-time setup: virtualenv + Python dependencies + model weights.
-# After this finishes, start the UI with ./run_app.sh
+# After this finishes, start the UI with ./scripts/run_app.sh
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 PYTHON="${PYTHON:-python3}"
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
@@ -29,4 +29,4 @@ echo "downloading model weights (one time, ~1 GB)..."
 
 echo
 echo "Setup complete. Start the UI with:"
-echo "  ./run_app.sh"
+echo "  ./scripts/run_app.sh"

@@ -1,6 +1,6 @@
 """Progress file helper for long-running worker scripts.
 
-Worker scripts (index_faces.py, match_person.py, pick_reference_faces.py)
+Worker modules (cli.index_faces, cli.match_person, cli.pick_reference_faces)
 write a small JSON file periodically; the web app polls it to show live
 progress. The file is tiny and rewritten atomically (tmp + rename).
 """

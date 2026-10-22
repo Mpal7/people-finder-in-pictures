@@ -2,12 +2,12 @@
 """Choose the target person's face in each reference photo, then crop it.
 
 Stage A - build the picking page (no changes to your files):
-  .venv/bin/python pick_reference_faces.py --src people/alice/refs_src
+  .venv/bin/python -m cli.pick_reference_faces --src people/alice/refs_src
   -> refs_pick/index.html  (open in a browser, click the person's face in every
      photo, then click "Export selection" - or just use the web UI)
 
 Stage B - apply the selection (writes crops, originals untouched):
-  .venv/bin/python pick_reference_faces.py --apply refs_pick/selection.json \
+  .venv/bin/python -m cli.pick_reference_faces --apply refs_pick/selection.json \
       --src people/alice/refs_src --dest people/alice/refs
   -> people/alice/refs/<name>_face.jpg  (margin crops around the chosen face,
      up to 1200 px, plus a .kps.json landmark sidecar)
@@ -28,7 +28,7 @@ from photo_finder.models import FaceModels
 from photo_finder.paths import expand_path
 from photo_finder.progress import Progress
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parents[1]
 
 HTML = """<!doctype html>
 <html lang="en">

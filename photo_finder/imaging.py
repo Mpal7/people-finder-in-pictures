@@ -29,7 +29,7 @@ def load_folder_rank(path: str | Path | None) -> dict[str, int]:
 
     The file is a JSON object mapping folder names to integer ranks, e.g.
     ``{"camera": 80, "phone_backup": 70, "exports": 10}``. Higher wins; folders
-    not listed rank 0. Only relevant when ``index_faces.py --dedup`` is used.
+    not listed rank 0. Only relevant when ``cli.index_faces --dedup`` is used.
     """
     if not path:
         return {}

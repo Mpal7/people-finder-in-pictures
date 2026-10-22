@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from pick_reference_faces import stage_apply
+from cli.pick_reference_faces import stage_apply
 from photo_finder import review
 from photo_finder.imaging import image_date, load_dup_map
 from photo_finder.jobs import JobManager, pid_alive

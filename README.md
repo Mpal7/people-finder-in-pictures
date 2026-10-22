@@ -46,11 +46,11 @@ Originals are only ever read. Everything runs on your hardware.
 ```powershell
 git clone <this-repo> people-finder
 cd people-finder
-powershell -ExecutionPolicy Bypass -File .\setup.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
 
-`setup.ps1` creates `.venv`, installs `requirements.txt`, and downloads the
-model weights once (~1 GB). Afterwards the tool runs fully offline.
+`scripts/setup.ps1` creates `.venv`, installs `requirements.txt`, and downloads
+the model weights once (~1 GB). Afterwards the tool runs fully offline.
 
 Manual equivalent:
 
@@ -65,7 +65,7 @@ py -3.12 -m venv .venv
 ```bash
 git clone <this-repo> people-finder
 cd people-finder
-./setup.sh
+./scripts/setup.sh
 ```
 
 Manual equivalent:
@@ -89,15 +89,15 @@ python3-dev` instead.
 **Windows:**
 
 ```powershell
-.\run_app.ps1               # http://127.0.0.1:8770
-.\run_app.ps1 --port 9000   # if 8770 is taken
+.\scripts\run_app.ps1               # http://127.0.0.1:8770
+.\scripts\run_app.ps1 --port 9000   # if 8770 is taken
 ```
 
 **Linux:**
 
 ```bash
-./run_app.sh               # http://127.0.0.1:8770
-./run_app.sh --port 9000   # if 8770 is taken
+./scripts/run_app.sh               # http://127.0.0.1:8770
+./scripts/run_app.sh --port 9000   # if 8770 is taken
 ```
 
 On first start, set the **collection root** in **Dashboard → Settings** to any
@@ -195,61 +195,65 @@ resumes or continues.
 
 ## CLI (advanced)
 
-| File | Role |
+| Module | Role |
 |---|---|
-| `index_faces.py` | resumable face index → SQLite (`data/faces.db`), dedup-aware |
-| `pick_reference_faces.py` | reference scan + face picker (crops + landmark sidecars) |
-| `match_person.py` | match a person's refs against the index → review page + scores |
-| `export_matches.py` | copy selected matches (`found/<person>/`, sha256 manifest) |
-| `detect_screenshots.py` | screenshot classification for indexed images |
-| `index_status.py` | index status, also while the UI runs |
-| `resume_index.py` | resume indexing from any folder, detached (Windows/Linux) |
+| `cli.index_faces` | resumable face index → SQLite (`data/faces.db`), dedup-aware |
+| `cli.pick_reference_faces` | reference scan + face picker (crops + landmark sidecars) |
+| `cli.match_person` | match a person's refs against the index → review page + scores |
+| `cli.export_matches` | copy selected matches (`found/<person>/`, sha256 manifest) |
+| `cli.detect_screenshots` | screenshot classification for indexed images |
+| `cli.index_status` | index status, also while the UI runs |
+| `cli.resume_index` | resume indexing from any folder, detached (Windows/Linux) |
 | `webapp.py` | local UI (FastAPI, 127.0.0.1 only) |
 
-Use `.venv\Scripts\python.exe` on Windows or `.venv/bin/python` on Linux below.
+Run these modules from the repo root. Use `.venv\Scripts\python.exe` on Windows
+or `.venv/bin/python` on Linux below.
 
 ```powershell
 # Windows
-.\.venv\Scripts\python.exe index_faces.py "D:\Photos" --models w600k --det-sizes 1280
-.\.venv\Scripts\python.exe pick_reference_faces.py --src people\alice\refs_src
-.\.venv\Scripts\python.exe pick_reference_faces.py --apply people\alice\refs_pick\selection.json `
+.\.venv\Scripts\python.exe -m cli.index_faces "D:\Photos" --models w600k --det-sizes 1280
+.\.venv\Scripts\python.exe -m cli.pick_reference_faces --src people\alice\refs_src
+.\.venv\Scripts\python.exe -m cli.pick_reference_faces --apply people\alice\refs_pick\selection.json `
     --src people\alice\refs_src --dest people\alice\refs
-.\.venv\Scripts\python.exe match_person.py --root "D:\Photos" --refs people\alice\refs `
+.\.venv\Scripts\python.exe -m cli.match_person --root "D:\Photos" --refs people\alice\refs `
     --neg-refs people\alice\refs_neg --out review\alice --top-faces 600
-.\.venv\Scripts\python.exe export_matches.py --root "D:\Photos" `
+.\.venv\Scripts\python.exe -m cli.export_matches --root "D:\Photos" `
     --selection review\alice\selection.json --dest found\alice --flat
-.\.venv\Scripts\python.exe index_status.py --watch 60
+.\.venv\Scripts\python.exe -m cli.index_status --watch 60
 ```
 
 ```bash
 # Linux
-.venv/bin/python index_faces.py "/mnt/foto/Foto" --models w600k --det-sizes 1280
-.venv/bin/python pick_reference_faces.py --src people/alice/refs_src
-.venv/bin/python pick_reference_faces.py --apply people/alice/refs_pick/selection.json \
+.venv/bin/python -m cli.index_faces "/mnt/foto/Foto" --models w600k --det-sizes 1280
+.venv/bin/python -m cli.pick_reference_faces --src people/alice/refs_src
+.venv/bin/python -m cli.pick_reference_faces --apply people/alice/refs_pick/selection.json \
     --src people/alice/refs_src --dest people/alice/refs
-.venv/bin/python match_person.py --root "/mnt/foto/Foto" --refs people/alice/refs \
+.venv/bin/python -m cli.match_person --root "/mnt/foto/Foto" --refs people/alice/refs \
     --neg-refs people/alice/refs_neg --out review/alice --top-faces 600
-.venv/bin/python export_matches.py --root "/mnt/foto/Foto" \
+.venv/bin/python -m cli.export_matches --root "/mnt/foto/Foto" \
     --selection review/alice/selection.json --dest found/alice --flat
-.venv/bin/python index_status.py --watch 60
+.venv/bin/python -m cli.index_status --watch 60
 ```
 
 Useful options:
 
-- `index_faces.py --dedup recon/out/duplicates.csv` indexes one canonical copy
+- `cli.index_faces --dedup recon/out/duplicates.csv` indexes one canonical copy
   per exact-duplicate group. `--folder-rank data/folder_rank.json` prefers
   copies from named top-level folders (higher rank wins; unlisted rank 0).
-- `match_person.py --neg-refs DIR` / `--neg-weight` control look-alike
+- `cli.match_person --neg-refs DIR` / `--neg-weight` control look-alike
   suppression; `--fusion`, `--weights` and `--min-z` tune ranking;
   `--near-dup-threshold` (or `--no-near-dup`) controls review grouping.
-- `resume_index.py` relaunches the indexer after a reboot and works on both
-  platforms: `.\resume_index.ps1 --root "D:\Photos"` or
-  `./resume_index.sh --root /mnt/foto/Foto`. The worker is detached and appears
-  in the Jobs tab.
+- `cli.resume_index` relaunches the indexer after a reboot and works on both
+  platforms: `.\scripts\resume_index.ps1 --root "D:\Photos"` or
+  `./scripts/resume_index.sh --root /mnt/foto/Foto`. The worker is detached and
+  appears in the Jobs tab.
 
 ## Layout
 
 ```
+webapp.py            local UI entry point
+cli/                 Python command-line modules (python -m cli.*)
+scripts/             setup/run/resume launchers (PowerShell + shell)
 data/faces.db        shared face index (images, faces, embeddings)
 data/jobs.json       background job registry + logs/progress
 data/config.json     UI settings (collection root)
@@ -280,10 +284,11 @@ Runtime data, models and exports are git-ignored.
 - **Collection folder not found** — update the path in **Dashboard → Settings**
   (a drive letter can change when a removable disk is reconnected; a network
   share must be online). There is no mount step and no fixed drive.
-- **Model not found** — run `recon/setup_models.py`, or rerun `.\setup.ps1` /
-  `./setup.sh`.
+- **Model not found** — run `recon/setup_models.py`, or rerun
+  `.\scripts\setup.ps1` / `./scripts/setup.sh`.
 - **PowerShell blocks the scripts** — run them with
-  `powershell -ExecutionPolicy Bypass -File .\run_app.ps1` (same for setup).
+  `powershell -ExecutionPolicy Bypass -File .\scripts\run_app.ps1` (same for
+  setup).
 - **Python launcher missing** — install Python 3.10–3.12 from python.org and
   enable the `py` launcher; avoid the Microsoft Store stub if pip cannot find
   your venv.
